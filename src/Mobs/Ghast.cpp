@@ -3,12 +3,13 @@
 
 #include "Ghast.h"
 #include "../World.h"
+#include "../Entities/GhastFireballEntity.h"
 
 
 
 
 cGhast::cGhast(void) :
-	super("Ghast", mtGhast, "mob.ghast.scream", "mob.ghast.death", 4, 4)
+	super("Ghast", mtGhast, "entity.ghast.hurt", "entity.ghast.death", 4, 4)
 {
 }
 
@@ -18,36 +19,38 @@ cGhast::cGhast(void) :
 
 void cGhast::GetDrops(cItems & a_Drops, cEntity * a_Killer)
 {
-	AddRandomDropItem(a_Drops, 0, 2, E_ITEM_GUNPOWDER);
-	AddRandomDropItem(a_Drops, 0, 1, E_ITEM_GHAST_TEAR);
+	unsigned int LootingLevel = 0;
+	if (a_Killer != nullptr)
+	{
+		LootingLevel = a_Killer->GetEquippedWeapon().m_Enchantments.GetLevel(cEnchantments::enchLooting);
+	}
+	AddRandomDropItem(a_Drops, 0, 2 + LootingLevel, E_ITEM_GUNPOWDER);
+	AddRandomDropItem(a_Drops, 0, 1 + LootingLevel, E_ITEM_GHAST_TEAR);
 }
 
 
 
 
 
-void cGhast::Attack(float a_Dt)
+bool cGhast::Attack(std::chrono::milliseconds a_Dt)
 {
-	m_AttackInterval += a_Dt * m_AttackRate;
-	
-	if (m_Target != NULL && m_AttackInterval > 3.0)
+	if ((GetTarget() != nullptr) && (m_AttackCoolDownTicksLeft == 0))
 	{
 		// Setting this higher gives us more wiggle room for attackrate
 		Vector3d Speed = GetLookVector() * 20;
 		Speed.y = Speed.y + 1;
-		cGhastFireballEntity * GhastBall = new cGhastFireballEntity(this, GetPosX(), GetPosY() + 1, GetPosZ(), Speed);
-		if (GhastBall == NULL)
+
+		auto GhastBall = cpp14::make_unique<cGhastFireballEntity>(this, GetPosX(), GetPosY() + 1, GetPosZ(), Speed);
+		auto GhastBallPtr = GhastBall.get();
+		if (!GhastBallPtr->Initialize(std::move(GhastBall), *m_World))
 		{
-			return;
+			return false;
 		}
-		if (!GhastBall->Initialize(m_World))
-		{
-			delete GhastBall;
-			return;
-		}
-		m_World->BroadcastSpawnEntity(*GhastBall);
-		m_AttackInterval = 0.0;
+
+		ResetAttackCooldown();
+		return true;
 	}
+	return false;
 }
 
 

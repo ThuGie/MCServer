@@ -16,11 +16,11 @@ public:
 	{
 	}
 
-	virtual const char * GetStepSound(void) override
+	virtual ColourID GetMapBaseColourID(NIBBLETYPE a_Meta) override
 	{
-		return "step.sand";
+		UNUSED(a_Meta);
+		return 2;
 	}
-	
 };
 
 

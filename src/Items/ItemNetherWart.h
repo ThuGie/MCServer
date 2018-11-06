@@ -25,7 +25,7 @@ public:
 
 	virtual bool GetPlacementBlockTypeMeta(
 		cWorld * a_World, cPlayer * a_Player,
-		int a_BlockX, int a_BlockY, int a_BlockZ, char a_BlockFace, 
+		int a_BlockX, int a_BlockY, int a_BlockZ, eBlockFace a_BlockFace,
 		int a_CursorX, int a_CursorY, int a_CursorZ,
 		BLOCKTYPE & a_BlockType, NIBBLETYPE & a_BlockMeta
 	) override
@@ -35,7 +35,7 @@ public:
 			// Only allow planting nether wart from the top side of the block
 			return false;
 		}
-		
+
 		// Only allow placement on farmland
 		int X = a_BlockX;
 		int Y = a_BlockY;

@@ -3,17 +3,18 @@
 
 #include "MobSpawner.h"
 #include "Mobs/IncludeAllMonsters.h"
+#include "World.h"
 
 
 
 
 
-cMobSpawner::cMobSpawner(cMonster::eFamily a_MonsterFamily,const std::set<cMonster::eType>& a_AllowedTypes) :
+cMobSpawner::cMobSpawner(cMonster::eFamily a_MonsterFamily, const std::set<eMonsterType>& a_AllowedTypes) :
 	m_MonsterFamily(a_MonsterFamily),
 	m_NewPack(true),
-	m_MobType(cMonster::mtInvalidType)
+	m_MobType(mtInvalidType)
 {
-	for (std::set<cMonster::eType>::const_iterator itr = a_AllowedTypes.begin(); itr != a_AllowedTypes.end(); itr++)
+	for (std::set<eMonsterType>::const_iterator itr = a_AllowedTypes.begin(); itr != a_AllowedTypes.end(); ++itr)
 	{
 		if (cMonster::FamilyFromType(*itr) == a_MonsterFamily)
 		{
@@ -44,246 +45,249 @@ bool cMobSpawner::CheckPackCenter(BLOCKTYPE a_BlockType)
 
 
 
-void cMobSpawner::addIfAllowed(cMonster::eType toAdd, std::set<cMonster::eType>& toAddIn)
+eMonsterType cMobSpawner::ChooseMobType(EMCSBiome a_Biome)
 {
-	std::set<cMonster::eType>::iterator itr = m_AllowedTypes.find(toAdd);
-	if (itr != m_AllowedTypes.end())
+	std::vector<eMonsterType> AllowedMobs;
+
+	for (eMonsterType MobType : GetAllowedMobTypes(a_Biome))
 	{
-		toAddIn.insert(toAdd);
+		auto itr = m_AllowedTypes.find(MobType);
+		if (itr != m_AllowedTypes.end())
+		{
+			AllowedMobs.push_back(MobType);
+		}
 	}
+
+	// Pick a random mob from the options:
+	if (AllowedMobs.empty())
+	{
+		return mtInvalidType;
+	}
+
+	return AllowedMobs[GetRandomProvider().RandInt(AllowedMobs.size() - 1)];
 }
 
 
 
 
 
-cMonster::eType cMobSpawner::ChooseMobType(EMCSBiome a_Biome)
+bool cMobSpawner::CanSpawnHere(cChunk * a_Chunk, int a_RelX, int a_RelY, int a_RelZ, eMonsterType a_MobType, EMCSBiome a_Biome)
 {
-	std::set<cMonster::eType> allowedMobs;
+	if (a_Chunk == nullptr)
+	{
+		return false;
+	}
 
-	if (a_Biome == biMushroomIsland || a_Biome == biMushroomShore)
+	if (cChunkDef::IsValidHeight(a_RelY - 1) && (a_Chunk->GetBlock(a_RelX, a_RelY - 1, a_RelZ) == E_BLOCK_BEDROCK))
 	{
-		addIfAllowed(cMonster::mtMooshroom, allowedMobs);
+		return false;   // Make sure mobs do not spawn on bedrock.
 	}
-	else if (a_Biome == biNether)
-	{
-		addIfAllowed(cMonster::mtGhast, allowedMobs);
-		addIfAllowed(cMonster::mtZombiePigman, allowedMobs);
-		addIfAllowed(cMonster::mtMagmaCube, allowedMobs);
-	}
-	else if (a_Biome == biEnd)
-	{
-		addIfAllowed(cMonster::mtEnderman, allowedMobs);
-	}
-	else
-	{
-		addIfAllowed(cMonster::mtBat, allowedMobs);
-		addIfAllowed(cMonster::mtSpider, allowedMobs);
-		addIfAllowed(cMonster::mtZombie, allowedMobs);
-		addIfAllowed(cMonster::mtSkeleton, allowedMobs);
-		addIfAllowed(cMonster::mtCreeper, allowedMobs);
-		addIfAllowed(cMonster::mtSquid, allowedMobs);
-		
-		if (a_Biome != biDesert && a_Biome != biBeach && a_Biome != biOcean)
+
+	auto & Random = GetRandomProvider();
+	BLOCKTYPE TargetBlock = a_Chunk->GetBlock(a_RelX, a_RelY, a_RelZ);
+
+	// If too close to any player, don't spawn anything
+	auto WorldPos = a_Chunk->PositionToWorldPosition(a_RelX, a_RelY, a_RelZ);
+	static const double RangeLimit = 24;
+	if (a_Chunk->GetWorld()->DoWithNearestPlayer(WorldPos, RangeLimit, [](cPlayer & a_Player) -> bool
 		{
-			addIfAllowed(cMonster::mtSheep, allowedMobs);
-			addIfAllowed(cMonster::mtPig, allowedMobs);
-			addIfAllowed(cMonster::mtCow, allowedMobs);
-			addIfAllowed(cMonster::mtChicken, allowedMobs);
-			addIfAllowed(cMonster::mtEnderman, allowedMobs);
-			addIfAllowed(cMonster::mtSlime, allowedMobs);	// MG TODO : much more complicated rule
-			
-			if (a_Biome == biForest || a_Biome == biForestHills || a_Biome == biTaiga  || a_Biome == biTaigaHills)
-			{
-				addIfAllowed(cMonster::mtWolf, allowedMobs);
-			}
-			else if (a_Biome == biJungle || a_Biome == biJungleHills)
-			{
-				addIfAllowed(cMonster::mtOcelot, allowedMobs);
-			}
-		}
+			return true;
+		})
+	)
+	{
+		return false;
 	}
 
-	int allowedMobsSize = allowedMobs.size();
-	if (allowedMobsSize > 0)
+	if ((a_RelY >= cChunkDef::Height - 1) || (a_RelY <= 0))
 	{
-		std::set<cMonster::eType>::iterator itr = allowedMobs.begin();
-		int iRandom = m_Random.NextInt(allowedMobsSize,a_Biome);
+		return false;
+	}
 
-		for(int i = 0; i < iRandom; i++)
+	NIBBLETYPE BlockLight = a_Chunk->GetBlockLight(a_RelX, a_RelY, a_RelZ);
+	NIBBLETYPE SkyLight = a_Chunk->GetSkyLight(a_RelX, a_RelY, a_RelZ);
+	BLOCKTYPE BlockAbove = a_Chunk->GetBlock(a_RelX, a_RelY + 1, a_RelZ);
+	BLOCKTYPE BlockBelow = a_Chunk->GetBlock(a_RelX, a_RelY - 1, a_RelZ);
+
+	SkyLight = a_Chunk->GetTimeAlteredLight(SkyLight);
+
+	switch (a_MobType)
+	{
+		case mtGuardian:
 		{
-			itr++;
+			return IsBlockWater(TargetBlock) && IsBlockWater(BlockBelow) && (a_RelY >= 45) && (a_RelY <= 62);
 		}
 
-		return *itr;
-	}
-	return cMonster::mtInvalidType;
-}
-
-
-
-
-
-bool cMobSpawner::CanSpawnHere(cChunk * a_Chunk, int a_RelX, int a_RelY, int a_RelZ, cMonster::eType a_MobType, EMCSBiome a_Biome)
-{
-	BLOCKTYPE TargetBlock;
-	if (m_AllowedTypes.find(a_MobType) != m_AllowedTypes.end() && a_Chunk->UnboundedRelGetBlockType(a_RelX, a_RelY, a_RelZ, TargetBlock))
-	{
-		NIBBLETYPE BlockLight = a_Chunk->GetBlockLight(a_RelX, a_RelY, a_RelZ);
-		NIBBLETYPE SkyLight = a_Chunk->GetSkyLight(a_RelX, a_RelY, a_RelZ);
-		BLOCKTYPE BlockAbove = a_Chunk->GetBlock(a_RelX, a_RelY + 1, a_RelZ);
-		BLOCKTYPE BlockBelow = a_Chunk->GetBlock(a_RelX, a_RelY - 1, a_RelZ);
-
-		SkyLight = a_Chunk->GetTimeAlteredLight(SkyLight);
-
-		switch(a_MobType)
+		case mtSquid:
 		{
-			case cMonster::mtSquid:
-			{
-				return IsBlockWater(TargetBlock) && (a_RelY >= 45) && (a_RelY <= 62);
-			}
+			return IsBlockWater(TargetBlock) && (a_RelY >= 45) && (a_RelY <= 62);
+		}
 
-			case cMonster::mtBat:
-			{
-				return (a_RelY <= 63) && (BlockLight <= 4) && (SkyLight <= 4) && (TargetBlock == E_BLOCK_AIR) && (!g_BlockTransparent[BlockAbove]);
-			}
+		case mtBat:
+		{
+			return (a_RelY <= 63) && (BlockLight <= 4) && (SkyLight <= 4) && (TargetBlock == E_BLOCK_AIR) && !cBlockInfo::IsTransparent(BlockAbove);
+		}
 
-			case cMonster::mtChicken:
-			case cMonster::mtCow:
-			case cMonster::mtPig:
-			case cMonster::mtHorse:
-			case cMonster::mtSheep:
+		case mtChicken:
+		case mtCow:
+		case mtPig:
+		case mtHorse:
+		case mtRabbit:
+		case mtSheep:
+		{
+			return (
+				(TargetBlock == E_BLOCK_AIR) &&
+				(BlockAbove == E_BLOCK_AIR) &&
+				(!cBlockInfo::IsTransparent(BlockBelow)) &&
+				(BlockBelow == E_BLOCK_GRASS) &&
+				(SkyLight >= 9)
+			);
+		}
+
+		case mtOcelot:
+		{
+			return (
+				(TargetBlock == E_BLOCK_AIR) &&
+				(BlockAbove == E_BLOCK_AIR) &&
+				(
+					(BlockBelow == E_BLOCK_GRASS) || (BlockBelow == E_BLOCK_LEAVES) || (BlockBelow == E_BLOCK_NEW_LEAVES)
+				) &&
+				(a_RelY >= 62) &&
+				(Random.RandBool(2.0 / 3.0))
+			);
+		}
+
+		case mtEnderman:
+		{
+			if (a_RelY < 250)
 			{
-				return (
-					(TargetBlock == E_BLOCK_AIR) &&
-					(BlockAbove == E_BLOCK_AIR) &&
-					(!g_BlockTransparent[BlockBelow]) &&
-					(BlockBelow == E_BLOCK_GRASS) &&
-					(SkyLight >= 9)
-				);
-			}
-				
-			case cMonster::mtOcelot:
-			{
-				return (
-					(TargetBlock == E_BLOCK_AIR) &&
-					(BlockAbove == E_BLOCK_AIR) &&
-					(
-						(BlockBelow == E_BLOCK_GRASS) || (BlockBelow == E_BLOCK_LEAVES)
-					) &&
-					(a_RelY >= 62) &&
-					(m_Random.NextInt(3, a_Biome) != 0)
-				);
-			}
-			
-			case cMonster::mtEnderman:
-			{
-				if (a_RelY < 250)
+				BLOCKTYPE BlockTop = a_Chunk->GetBlock(a_RelX, a_RelY + 2, a_RelZ);
+				if (BlockTop == E_BLOCK_AIR)
 				{
-					BLOCKTYPE BlockTop = a_Chunk->GetBlock(a_RelX, a_RelY + 2, a_RelZ);
-					if (BlockTop == E_BLOCK_AIR)
-					{
-						BlockTop = a_Chunk->GetBlock(a_RelX, a_RelY + 3, a_RelZ);
-						return (
-							(TargetBlock == E_BLOCK_AIR) &&
-							(BlockAbove == E_BLOCK_AIR) &&
-							(BlockTop == E_BLOCK_AIR) &&
-							(!g_BlockTransparent[BlockBelow]) &&
-							(SkyLight <= 7) &&
-							(BlockLight <= 7)
-						);
-					}
+					BlockTop = a_Chunk->GetBlock(a_RelX, a_RelY + 3, a_RelZ);
+					return (
+						(TargetBlock == E_BLOCK_AIR) &&
+						(BlockAbove == E_BLOCK_AIR) &&
+						(BlockTop == E_BLOCK_AIR) &&
+						(!cBlockInfo::IsTransparent(BlockBelow)) &&
+						(SkyLight <= 7) &&
+						(BlockLight <= 7)
+					);
 				}
-				break;
 			}
-			
-			case cMonster::mtSpider:
+			break;
+		}
+
+		case mtSpider:
+		{
+			bool CanSpawn = true;
+			bool HasFloor = false;
+			for (int x = 0; x < 2; ++x)
 			{
-				bool CanSpawn = true;
-				bool HaveFloor = false;
-				for (int x = 0; x < 2; ++x)
+				for (int z = 0; z < 2; ++z)
 				{
-					for(int z = 0; z < 2; ++z)
+					CanSpawn = a_Chunk->UnboundedRelGetBlockType(a_RelX + x, a_RelY, a_RelZ + z, TargetBlock);
+					CanSpawn = CanSpawn && (TargetBlock == E_BLOCK_AIR);
+					if (!CanSpawn)
 					{
-						CanSpawn = a_Chunk->UnboundedRelGetBlockType(a_RelX + x, a_RelY, a_RelZ + z, TargetBlock);
-						CanSpawn = CanSpawn && (TargetBlock == E_BLOCK_AIR);
-						if (!CanSpawn)
-						{
-							return false;
-						}
-						HaveFloor = (
-							HaveFloor ||
-							(
-								a_Chunk->UnboundedRelGetBlockType(a_RelX + x, a_RelY - 1, a_RelZ + z, TargetBlock) &&
-								!g_BlockTransparent[TargetBlock]
-							)
-						);
+						return false;
 					}
+					HasFloor = (
+						HasFloor ||
+						(
+							a_Chunk->UnboundedRelGetBlockType(a_RelX + x, a_RelY - 1, a_RelZ + z, TargetBlock) &&
+							!cBlockInfo::IsTransparent(TargetBlock)
+						)
+					);
 				}
-				return CanSpawn && HaveFloor && (SkyLight <= 7) && (BlockLight <= 7);
 			}
-			
-			case cMonster::mtCreeper:
-			case cMonster::mtSkeleton:
-			case cMonster::mtZombie:
-			{
-				return (
-					(TargetBlock == E_BLOCK_AIR) &&
-					(BlockAbove == E_BLOCK_AIR) &&
-					(!g_BlockTransparent[BlockBelow]) &&
-					(SkyLight <= 7) &&
-					(BlockLight <= 7) &&
-					(m_Random.NextInt(2, a_Biome) == 0)
-				);
-			}
-			
-			case cMonster::mtSlime:
-			{
-				return (
-					(TargetBlock == E_BLOCK_AIR) &&
-					(BlockAbove == E_BLOCK_AIR) &&
-					(!g_BlockTransparent[BlockBelow]) &&
-					(
-						(a_RelY <= 40) || (a_Biome == biSwampland)
-					)
-				);
-			}
-			
-			case cMonster::mtGhast:
-			case cMonster::mtZombiePigman:
-			{
-				return (
-					(TargetBlock == E_BLOCK_AIR) &&
-					(BlockAbove == E_BLOCK_AIR) &&
-					(!g_BlockTransparent[BlockBelow]) &&
-					(m_Random.NextInt(20, a_Biome) == 0)
-				);
-			}
-			
-			case cMonster::mtWolf:
-			{
-				return (
-					(TargetBlock == E_BLOCK_GRASS) &&
-					(BlockAbove == E_BLOCK_AIR) &&
-					(
-						(a_Biome == biTaiga) ||
-						(a_Biome == biTaigaHills) ||
-						(a_Biome == biForest) ||
-						(a_Biome == biForestHills) ||
-						(a_Biome == biColdTaiga) ||
-						(a_Biome == biColdTaigaHills) ||
-						(a_Biome == biTaigaM) ||
-						(a_Biome == biMegaTaiga) ||
-						(a_Biome == biMegaTaigaHills)
-					)
-				);
-			}
-			
-			default:
-			{
-				LOGD("MG TODO: Write spawning rule for mob type %d", a_MobType);
-				return false;
-			}
+			return CanSpawn && HasFloor && (SkyLight <= 7) && (BlockLight <= 7);
+		}
+
+		case mtCaveSpider:
+		{
+			return (
+				(TargetBlock == E_BLOCK_AIR) &&
+				(!cBlockInfo::IsTransparent(BlockBelow)) &&
+				(SkyLight <= 7) &&
+				(BlockLight <= 7) &&
+				(Random.RandBool())
+			);
+		}
+
+		case mtCreeper:
+		case mtSkeleton:
+		case mtZombie:
+		{
+			return (
+				(TargetBlock == E_BLOCK_AIR) &&
+				(BlockAbove == E_BLOCK_AIR) &&
+				(!cBlockInfo::IsTransparent(BlockBelow)) &&
+				(SkyLight <= 7) &&
+				(BlockLight <= 7) &&
+				(Random.RandBool())
+			);
+		}
+
+		case mtMagmaCube:
+		case mtSlime:
+		{
+			return (
+				(TargetBlock == E_BLOCK_AIR) &&
+				(BlockAbove == E_BLOCK_AIR) &&
+				(!cBlockInfo::IsTransparent(BlockBelow)) &&
+				(
+					(a_RelY <= 40) || (a_Biome == biSwampland)
+				)
+			);
+		}
+
+		case mtGhast:
+		case mtZombiePigman:
+		{
+			return (
+				(TargetBlock == E_BLOCK_AIR) &&
+				(BlockAbove == E_BLOCK_AIR) &&
+				(!cBlockInfo::IsTransparent(BlockBelow)) &&
+				(Random.RandBool(0.05))
+			);
+		}
+
+		case mtWolf:
+		{
+			return (
+				(TargetBlock == E_BLOCK_GRASS) &&
+				(BlockAbove == E_BLOCK_AIR) &&
+				(
+					(a_Biome == biColdTaiga) ||
+					(a_Biome == biColdTaigaHills) ||
+					(a_Biome == biColdTaigaM) ||
+					(a_Biome == biForest) ||
+					(a_Biome == biTaiga) ||
+					(a_Biome == biTaigaHills) ||
+					(a_Biome == biTaigaM) ||
+					(a_Biome == biMegaTaiga) ||
+					(a_Biome == biMegaTaigaHills)
+				)
+			);
+		}
+
+		case mtMooshroom:
+		{
+			return (
+				(TargetBlock == E_BLOCK_AIR) &&
+				(BlockAbove == E_BLOCK_AIR) &&
+				(BlockBelow == E_BLOCK_MYCELIUM) &&
+				(
+					(a_Biome == biMushroomShore) ||
+					(a_Biome == biMushroomIsland)
+				)
+			);
+		}
+
+		default:
+		{
+			LOGD("MG TODO: Write spawning rule for mob type %d", a_MobType);
+			return false;
 		}
 	}
 	return false;
@@ -293,21 +297,154 @@ bool cMobSpawner::CanSpawnHere(cChunk * a_Chunk, int a_RelX, int a_RelY, int a_R
 
 
 
-cMonster* cMobSpawner::TryToSpawnHere(cChunk * a_Chunk, int a_RelX, int a_RelY, int a_RelZ, EMCSBiome a_Biome, int& a_MaxPackSize)
+std::set<eMonsterType> cMobSpawner::GetAllowedMobTypes(EMCSBiome a_Biome)
 {
-	cMonster* toReturn = NULL;
+	std::set<eMonsterType> ListOfSpawnables;
+	// Check biomes first to get a list of animals
+	switch (a_Biome)
+	{
+		// Nether mobs and endermen only - no other mobs in the nether
+		case biNether:
+		{
+			ListOfSpawnables.insert(mtGhast);
+			ListOfSpawnables.insert(mtMagmaCube);
+			ListOfSpawnables.insert(mtZombiePigman);
+			ListOfSpawnables.insert(mtEnderman);
+			return ListOfSpawnables;
+		}
+
+		// Endermen only - no other mobs in the end
+		case biEnd:
+		{
+			ListOfSpawnables.insert(mtEnderman);
+			return ListOfSpawnables;
+		}
+
+		// Mooshroom only - no other mobs on mushroom islands
+		case biMushroomIsland:
+		case biMushroomShore:
+		{
+			ListOfSpawnables.insert(mtMooshroom);
+			return ListOfSpawnables;
+		}
+
+		// Add Squid in ocean and river biomes
+		case biOcean:
+		case biFrozenOcean:
+		case biFrozenRiver:
+		case biRiver:
+		case biDeepOcean:
+		{
+			ListOfSpawnables.insert(mtGuardian);
+			break;
+		}
+
+		// Add ocelots in jungle biomes
+		case biJungle:
+		case biJungleHills:
+		case biJungleEdge:
+		case biJungleM:
+		case biJungleEdgeM:
+		{
+			ListOfSpawnables.insert(mtOcelot);
+			break;
+		}
+
+		// Add horses in plains-like biomes
+		case biPlains:
+		case biSunflowerPlains:
+		case biSavanna:
+		case biSavannaPlateau:
+		case biSavannaM:
+		case biSavannaPlateauM:
+		{
+			ListOfSpawnables.insert(mtHorse);
+			break;
+		}
+
+		// Add wolves in forest biomes
+		case biForest:
+		{
+			ListOfSpawnables.insert(mtWolf);
+			break;
+		}
+
+		// Add wolves and rabbits in all taiga biomes
+		case biColdTaiga:
+		case biColdTaigaM:
+		case biColdTaigaHills:
+		case biTaiga:
+		case biTaigaHills:
+		case biTaigaM:
+		case biMegaTaiga:
+		case biMegaTaigaHills:
+		{
+			ListOfSpawnables.insert(mtWolf);
+			ListOfSpawnables.insert(mtRabbit);
+			break;
+		}
+
+		// Add rabbits in desert and flower forest biomes
+		case biDesert:
+		case biDesertHills:
+		case biDesertM:
+		case biFlowerForest:
+		{
+			ListOfSpawnables.insert(mtRabbit);
+			break;
+		}
+
+		// Nothing special about this biome
+		default:
+		{
+			break;
+		}
+	}
+
+	if (
+		(a_Biome != biDesertHills) &&
+		(a_Biome != biDesert) &&
+		(a_Biome != biDesertM) &&
+		(a_Biome != biBeach) &&
+		(a_Biome != biOcean) &&
+		(a_Biome != biDeepOcean))
+	{
+		ListOfSpawnables.insert(mtSheep);
+		ListOfSpawnables.insert(mtPig);
+		ListOfSpawnables.insert(mtCow);
+		ListOfSpawnables.insert(mtChicken);
+		ListOfSpawnables.insert(mtEnderman);
+		ListOfSpawnables.insert(mtSlime);
+	}
+
+	ListOfSpawnables.insert(mtBat);
+	ListOfSpawnables.insert(mtSpider);
+	ListOfSpawnables.insert(mtZombie);
+	ListOfSpawnables.insert(mtSkeleton);
+	ListOfSpawnables.insert(mtCreeper);
+	ListOfSpawnables.insert(mtSquid);
+
+	return ListOfSpawnables;
+}
+
+
+
+
+
+cMonster * cMobSpawner::TryToSpawnHere(cChunk * a_Chunk, int a_RelX, int a_RelY, int a_RelZ, EMCSBiome a_Biome, int & a_MaxPackSize)
+{
 	if (m_NewPack)
 	{
 		m_MobType = ChooseMobType(a_Biome);
-		if (m_MobType == cMonster::mtInvalidType)
+		if (m_MobType == mtInvalidType)
 		{
-			return toReturn;
+			return nullptr;
 		}
-		if (m_MobType == cMonster::mtWolf)
+		if (m_MobType == mtWolf)
 		{
 			a_MaxPackSize = 8;
 		}
-		else if (m_MobType == cMonster::mtGhast)
+		else if (m_MobType == mtGhast)
 		{
 			a_MaxPackSize = 1;
 		}
@@ -316,17 +453,19 @@ cMonster* cMobSpawner::TryToSpawnHere(cChunk * a_Chunk, int a_RelX, int a_RelY, 
 
 	// Make sure we are looking at the right chunk to spawn in
 	a_Chunk = a_Chunk->GetRelNeighborChunkAdjustCoords(a_RelX, a_RelZ);
-	
-	if (CanSpawnHere(a_Chunk, a_RelX, a_RelY, a_RelZ, m_MobType, a_Biome))
+
+	if ((m_AllowedTypes.find(m_MobType) != m_AllowedTypes.end()) && CanSpawnHere(a_Chunk, a_RelX, a_RelY, a_RelZ, m_MobType, a_Biome))
 	{
-		cMonster * newMob = cMonster::NewMonsterFromType(m_MobType);
+		auto newMob = cMonster::NewMonsterFromType(m_MobType);
+		auto NewMobPtr = newMob.get();
 		if (newMob)
 		{
-			m_Spawned.insert(newMob);
+			m_Spawned.push_back(std::move(newMob));
 		}
-		toReturn = newMob;
+		return NewMobPtr;
 	}
-	return toReturn;
+
+	return nullptr;
 }
 
 
@@ -336,15 +475,6 @@ cMonster* cMobSpawner::TryToSpawnHere(cChunk * a_Chunk, int a_RelX, int a_RelY, 
 void cMobSpawner::NewPack()
 {
 	m_NewPack = true;
-}
-
-
-
-
-
-cMobSpawner::tSpawnedContainer & cMobSpawner::getSpawned(void)
-{
-	return m_Spawned;
 }
 
 

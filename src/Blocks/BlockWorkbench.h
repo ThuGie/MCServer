@@ -2,7 +2,7 @@
 #pragma once
 
 #include "BlockHandler.h"
-#include "../UI/Window.h"
+#include "../UI/CraftingWindow.h"
 #include "../Entities/Player.h"
 
 
@@ -17,24 +17,23 @@ public:
 		: cBlockHandler(a_BlockType)
 	{
 	}
-	
-	
-	virtual void OnUse(cWorld * a_World, cPlayer * a_Player, int a_BlockX, int a_BlockY, int a_BlockZ, char a_BlockFace, int a_CursorX, int a_CursorY, int a_CursorZ) override
+
+	virtual bool OnUse(cChunkInterface & a_ChunkInterface, cWorldInterface & a_WorldInterface, cPlayer & a_Player, int a_BlockX, int a_BlockY, int a_BlockZ, eBlockFace a_BlockFace, int a_CursorX, int a_CursorY, int a_CursorZ) override
 	{
 		cWindow * Window = new cCraftingWindow(a_BlockX, a_BlockY, a_BlockZ);
-		a_Player->OpenWindow(Window);
+		a_Player.OpenWindow(*Window);
+		return true;
 	}
-
 
 	virtual bool IsUseable(void) override
 	{
 		return true;
 	}
 
-
-	virtual const char * GetStepSound(void) override
+	virtual ColourID GetMapBaseColourID(NIBBLETYPE a_Meta) override
 	{
-		return "step.wood";
+		UNUSED(a_Meta);
+		return 13;
 	}
 } ;
 

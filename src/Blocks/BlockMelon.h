@@ -15,18 +15,16 @@ public:
 		: cBlockHandler(a_BlockType)
 	{
 	}
-	
-	
+
 	virtual void ConvertToPickups(cItems & a_Pickups, NIBBLETYPE a_BlockMeta) override
 	{
-		MTRand r1;
-		a_Pickups.push_back(cItem(E_ITEM_MELON_SLICE, (char)(3 + r1.randInt(4)), 0));
+		a_Pickups.emplace_back(E_ITEM_MELON_SLICE, GetRandomProvider().RandInt<char>(3, 7), 0);
 	}
 
-
-	virtual const char * GetStepSound(void) override
+	virtual ColourID GetMapBaseColourID(NIBBLETYPE a_Meta) override
 	{
-		return "step.wood";
+		UNUSED(a_Meta);
+		return 19;
 	}
 } ;
 

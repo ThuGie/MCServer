@@ -11,23 +11,25 @@ class cCreeper :
 	public cAggressiveMonster
 {
 	typedef cAggressiveMonster super;
-	
+
 public:
 	cCreeper(void);
 
-	CLASS_PROTODEF(cCreeper);
+	CLASS_PROTODEF(cCreeper)
 
-	virtual void GetDrops(cItems & a_Drops, cEntity * a_Killer = NULL) override;
-	virtual void DoTakeDamage(TakeDamageInfo & a_TDI) override;
-	virtual void Attack(float a_Dt) override;
-	virtual void Tick(float a_Dt, cChunk & a_Chunk) override;
+	virtual void GetDrops(cItems & a_Drops, cEntity * a_Killer = nullptr) override;
+	virtual bool DoTakeDamage(TakeDamageInfo & a_TDI) override;
+	virtual bool Attack(std::chrono::milliseconds a_Dt) override;
+	virtual void Tick(std::chrono::milliseconds a_Dt, cChunk & a_Chunk) override;
+	virtual void OnRightClicked(cPlayer & a_Player) override;
 
 	bool IsBlowing(void) const {return m_bIsBlowing; }
 	bool IsCharged(void) const {return m_bIsCharged; }
+	bool IsBurnedWithFlintAndSteel(void) const {return m_BurnedWithFlintAndSteel; }
 
 private:
 
-	bool m_bIsBlowing, m_bIsCharged;
+	bool m_bIsBlowing, m_bIsCharged, m_BurnedWithFlintAndSteel;
 	int m_ExplodingTimer;
 
 } ;

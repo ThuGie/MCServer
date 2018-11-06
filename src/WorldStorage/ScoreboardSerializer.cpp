@@ -14,13 +14,13 @@
 
 
 
-cScoreboardSerializer::cScoreboardSerializer(const AString & a_WorldName, cScoreboard* a_ScoreBoard)
-	: m_ScoreBoard(a_ScoreBoard)
+cScoreboardSerializer::cScoreboardSerializer(const AString & a_WorldName, cScoreboard * a_ScoreBoard):
+	m_ScoreBoard(a_ScoreBoard)
 {
 	AString DataPath;
-	Printf(DataPath, "%s/data", a_WorldName.c_str());
+	Printf(DataPath, "%s%cdata", a_WorldName.c_str(), cFile::PathSeparator());
 
-	m_Path = DataPath + "/scoreboard.dat";
+	m_Path = DataPath + cFile::PathSeparator() + "scoreboard.dat";
 
 	cFile::CreateFolder(FILE_IO_PREFIX + DataPath);
 }
@@ -67,7 +67,7 @@ bool cScoreboardSerializer::Save(void)
 	SaveScoreboardToNBT(Writer);
 
 	Writer.Finish();
-	
+
 	#ifdef _DEBUG
 	cParsedNBT TestParse(Writer.GetResult().data(), Writer.GetResult().size());
 	ASSERT(TestParse.IsValid());
@@ -102,7 +102,7 @@ void cScoreboardSerializer::SaveScoreboardToNBT(cFastNBTWriter & a_Writer)
 	a_Writer.BeginCompound("data");
 
 	a_Writer.BeginList("Objectives", TAG_Compound);
-	
+
 	for (cScoreboard::cObjectiveMap::const_iterator it = m_ScoreBoard->m_Objectives.begin(); it != m_ScoreBoard->m_Objectives.end(); ++it)
 	{
 		const cObjective & Objective = it->second;
@@ -117,7 +117,7 @@ void cScoreboardSerializer::SaveScoreboardToNBT(cFastNBTWriter & a_Writer)
 		a_Writer.EndCompound();
 	}
 
-	a_Writer.EndList(); // Objectives
+	a_Writer.EndList();  // Objectives
 
 	a_Writer.BeginList("PlayerScores", TAG_Compound);
 
@@ -133,15 +133,15 @@ void cScoreboardSerializer::SaveScoreboardToNBT(cFastNBTWriter & a_Writer)
 
 			a_Writer.AddString("Name", it2->first);
 			a_Writer.AddString("Objective", it->first);
-			
+
 			a_Writer.EndCompound();
 		}
 	}
 
-	a_Writer.EndList(); // PlayerScores
+	a_Writer.EndList();  // PlayerScores
 
 	a_Writer.BeginList("Teams", TAG_Compound);
-	
+
 	for (cScoreboard::cTeamMap::const_iterator it = m_ScoreBoard->m_Teams.begin(); it != m_ScoreBoard->m_Teams.end(); ++it)
 	{
 		const cTeam & Team = it->second;
@@ -169,22 +169,22 @@ void cScoreboardSerializer::SaveScoreboardToNBT(cFastNBTWriter & a_Writer)
 		a_Writer.EndCompound();
 	}
 
-	a_Writer.EndList(); // Teams
+	a_Writer.EndList();  // Teams
 
 	a_Writer.BeginCompound("DisplaySlots");
 
-	cObjective * Objective = m_ScoreBoard->GetObjectiveIn(cScoreboard::E_DISPLAY_SLOT_LIST);
-	a_Writer.AddString("slot_0", (Objective == NULL) ? "" : Objective->GetName());
+	cObjective * Objective = m_ScoreBoard->GetObjectiveIn(cScoreboard::dsList);
+	a_Writer.AddString("slot_0", (Objective == nullptr) ? "" : Objective->GetName());
 
-	Objective = m_ScoreBoard->GetObjectiveIn(cScoreboard::E_DISPLAY_SLOT_SIDEBAR);
-	a_Writer.AddString("slot_1", (Objective == NULL) ? "" : Objective->GetName());
+	Objective = m_ScoreBoard->GetObjectiveIn(cScoreboard::dsSidebar);
+	a_Writer.AddString("slot_1", (Objective == nullptr) ? "" : Objective->GetName());
 
-	Objective = m_ScoreBoard->GetObjectiveIn(cScoreboard::E_DISPLAY_SLOT_NAME);
-	a_Writer.AddString("slot_2", (Objective == NULL) ? "" : Objective->GetName());
+	Objective = m_ScoreBoard->GetObjectiveIn(cScoreboard::dsName);
+	a_Writer.AddString("slot_2", (Objective == nullptr) ? "" : Objective->GetName());
 
-	a_Writer.EndCompound(); // DisplaySlots
+	a_Writer.EndCompound();  // DisplaySlots
 
-	a_Writer.EndCompound(); // Data
+	a_Writer.EndCompound();  // Data
 }
 
 
@@ -242,7 +242,7 @@ bool cScoreboardSerializer::LoadScoreboardFromNBT(const cParsedNBT & a_NBT)
 	{
 		AString Name, ObjectiveName;
 
-		cObjective::Score Score;
+		cObjective::Score Score = 0;
 
 		int CurrLine = a_NBT.FindChildByName(Child, "Score");
 		if (CurrLine >= 0)
@@ -280,40 +280,40 @@ bool cScoreboardSerializer::LoadScoreboardFromNBT(const cParsedNBT & a_NBT)
 	{
 		AString Name, DisplayName, Prefix, Suffix;
 
-		bool AllowsFriendlyFire, CanSeeFriendlyInvisible;
+		bool AllowsFriendlyFire = true, CanSeeFriendlyInvisible = false;
 
 		int CurrLine = a_NBT.FindChildByName(Child, "Name");
-		if (CurrLine >= 0)
+		if ((CurrLine >= 0) && (a_NBT.GetType(CurrLine) == TAG_String))
 		{
-			Name = a_NBT.GetInt(CurrLine);
+			Name = a_NBT.GetString(CurrLine);
 		}
 
 		CurrLine = a_NBT.FindChildByName(Child, "DisplayName");
-		if (CurrLine >= 0)
+		if ((CurrLine >= 0) && (a_NBT.GetType(CurrLine) == TAG_String))
 		{
-			DisplayName = a_NBT.GetInt(CurrLine);
+			DisplayName = a_NBT.GetString(CurrLine);
 		}
 
 		CurrLine = a_NBT.FindChildByName(Child, "Prefix");
-		if (CurrLine >= 0)
+		if ((CurrLine >= 0) && (a_NBT.GetType(CurrLine) == TAG_String))
 		{
-			Prefix = a_NBT.GetInt(CurrLine);
+			Prefix = a_NBT.GetString(CurrLine);
 		}
 
 		CurrLine = a_NBT.FindChildByName(Child, "Suffix");
-		if (CurrLine >= 0)
+		if ((CurrLine >= 0) && (a_NBT.GetType(CurrLine) == TAG_String))
 		{
-			Suffix = a_NBT.GetInt(CurrLine);
+			Suffix = a_NBT.GetString(CurrLine);
 		}
 
 		CurrLine = a_NBT.FindChildByName(Child, "AllowFriendlyFire");
-		if (CurrLine >= 0)
+		if ((CurrLine >= 0) && (a_NBT.GetType(CurrLine) == TAG_Int))
 		{
 			AllowsFriendlyFire = (a_NBT.GetInt(CurrLine) != 0);
 		}
 
 		CurrLine = a_NBT.FindChildByName(Child, "SeeFriendlyInvisibles");
-		if (CurrLine >= 0)
+		if ((CurrLine >= 0) && (a_NBT.GetType(CurrLine) == TAG_Int))
 		{
 			CanSeeFriendlyInvisible = (a_NBT.GetInt(CurrLine) != 0);
 		}
@@ -346,7 +346,7 @@ bool cScoreboardSerializer::LoadScoreboardFromNBT(const cParsedNBT & a_NBT)
 	{
 		AString Name = a_NBT.GetString(CurrLine);
 
-		m_ScoreBoard->SetDisplay(Name, cScoreboard::E_DISPLAY_SLOT_LIST);
+		m_ScoreBoard->SetDisplay(Name, cScoreboard::dsList);
 	}
 
 	CurrLine = a_NBT.FindChildByName(DisplaySlots, "slot_1");
@@ -354,7 +354,7 @@ bool cScoreboardSerializer::LoadScoreboardFromNBT(const cParsedNBT & a_NBT)
 	{
 		AString Name = a_NBT.GetString(CurrLine);
 
-		m_ScoreBoard->SetDisplay(Name, cScoreboard::E_DISPLAY_SLOT_SIDEBAR);
+		m_ScoreBoard->SetDisplay(Name, cScoreboard::dsSidebar);
 	}
 
 	CurrLine = a_NBT.FindChildByName(DisplaySlots, "slot_2");
@@ -362,7 +362,7 @@ bool cScoreboardSerializer::LoadScoreboardFromNBT(const cParsedNBT & a_NBT)
 	{
 		AString Name = a_NBT.GetString(CurrLine);
 
-		m_ScoreBoard->SetDisplay(Name, cScoreboard::E_DISPLAY_SLOT_NAME);
+		m_ScoreBoard->SetDisplay(Name, cScoreboard::dsName);
 	}
 
 	return true;

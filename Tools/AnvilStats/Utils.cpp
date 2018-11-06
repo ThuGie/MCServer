@@ -26,11 +26,13 @@ struct
 	{entEnderman,      "Enderman"},
 	{entGhast,         "Ghast"},
 	{entGiant,         "Giant"},
+	{entGuardian,      "Guardian"},
 	{entLavaSlime,     "LavaSlime"},
 	{entMushroomCow,   "MushroomCow"},
 	{entOzelot,        "Ozelot"},
 	{entPig,           "Pig"},
 	{entPigZombie,     "PigZombie"},
+	{entRabbit,        "Rabbit"},
 	{entSheep,         "Sheep"},
 	{entSilverfish,    "Slverfish"},
 	{entSkeleton,      "Skeleton"},
@@ -236,7 +238,7 @@ const char * GetBlockTypeString(unsigned char a_BlockType)
 		"Wooden Button",
 		"Head",
 	} ;
-	
+
 	return (a_BlockType < ARRAYCOUNT(BlockTypeNames)) ? BlockTypeNames[a_BlockType] : "";
 }
 
@@ -272,7 +274,7 @@ extern const char * GetEntityTypeString(eEntityType a_EntityType)
 int GetNumCores(void)
 {
 	// Get number of cores by querying the system process affinity mask (Windows-specific)
-	DWORD Affinity, ProcAffinity;
+	DWORD_PTR Affinity, ProcAffinity;
 	GetProcessAffinityMask(GetCurrentProcess(), &ProcAffinity, &Affinity);
 	int NumCores = 0;
 	while (Affinity > 0)
@@ -285,7 +287,3 @@ int GetNumCores(void)
 	}  // while (Affinity > 0)
 	return NumCores;
 }
-
-
-
-

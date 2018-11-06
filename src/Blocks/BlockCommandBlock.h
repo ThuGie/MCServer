@@ -21,9 +21,10 @@ public:
 		a_Pickups.push_back(cItem(E_BLOCK_AIR, 8, 0));
 	}
 
-	virtual const char * GetStepSound(void) override
+	virtual ColourID GetMapBaseColourID(NIBBLETYPE a_Meta) override
 	{
-		return "step.stone";
+		UNUSED(a_Meta);
+		return 10;
 	}
 } ;
 

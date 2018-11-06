@@ -4,14 +4,10 @@
 
 #include "Server.h"
 #include "ClientHandle.h"
-#include "OSSupport/Timer.h"
 #include "Mobs/Monster.h"
-#include "OSSupport/Socket.h"
 #include "Root.h"
 #include "World.h"
-#include "ChunkDef.h"
 #include "Bindings/PluginManager.h"
-#include "GroupManager.h"
 #include "ChatColor.h"
 #include "Entities/Player.h"
 #include "Inventory.h"
@@ -20,33 +16,18 @@
 #include "WebAdmin.h"
 #include "Protocol/ProtocolRecognizer.h"
 #include "CommandOutput.h"
+#include "FastRandom.h"
 
-#include "MersenneTwister.h"
-
-#include "inifile/iniFile.h"
-#include "Vector3f.h"
+#include "IniFile.h"
 
 #include <fstream>
 #include <sstream>
 #include <iostream>
 
-extern "C" {
+extern "C"
+{
 	#include "zlib/zlib.h"
 }
-
-
-
-
-// For the "dumpmem" server command:
-/// Synchronize this with main.cpp - the leak finder needs initialization before it can be used to dump memory
-#define ENABLE_LEAK_FINDER
-
-#if defined(_MSC_VER) && defined(_DEBUG) && defined(ENABLE_LEAK_FINDER)
-	#pragma warning(push)
-	#pragma warning(disable:4100)
-	#include "LeakFinder.h"
-	#pragma warning(pop)
-#endif
 
 
 
@@ -58,7 +39,40 @@ typedef std::list< cClientHandle* > ClientList;
 
 
 
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
+// cServerListenCallbacks:
+
+class cServerListenCallbacks:
+	public cNetwork::cListenCallbacks
+{
+	cServer & m_Server;
+	UInt16 m_Port;
+
+	virtual cTCPLink::cCallbacksPtr OnIncomingConnection(const AString & a_RemoteIPAddress, UInt16 a_RemotePort) override
+	{
+		return m_Server.OnConnectionAccepted(a_RemoteIPAddress);
+	}
+
+	virtual void OnAccepted(cTCPLink & a_Link) override {}
+
+	virtual void OnError(int a_ErrorCode, const AString & a_ErrorMsg) override
+	{
+		LOGWARNING("Cannot listen on port %d: %d (%s).", m_Port, a_ErrorCode, a_ErrorMsg.c_str());
+	}
+
+public:
+	cServerListenCallbacks(cServer & a_Server, UInt16 a_Port):
+		m_Server(a_Server),
+		m_Port(a_Port)
+	{
+	}
+};
+
+
+
+
+
+////////////////////////////////////////////////////////////////////////////////
 // cServer::cTickThread:
 
 cServer::cTickThread::cTickThread(cServer & a_Server) :
@@ -73,22 +87,20 @@ cServer::cTickThread::cTickThread(cServer & a_Server) :
 
 void cServer::cTickThread::Execute(void)
 {
-	cTimer Timer;
-
-	long long msPerTick = 50;
-	long long LastTime = Timer.GetNowTime();
+	auto LastTime = std::chrono::steady_clock::now();
+	static const auto msPerTick = std::chrono::milliseconds(50);
 
 	while (!m_ShouldTerminate)
 	{
-		long long NowTime = Timer.GetNowTime();
-		float DeltaTime = (float)(NowTime-LastTime);
-		m_ShouldTerminate = !m_Server.Tick(DeltaTime);
-		long long TickTime = Timer.GetNowTime() - NowTime;
-		
+		auto NowTime = std::chrono::steady_clock::now();
+		auto msec = std::chrono::duration_cast<std::chrono::milliseconds>(NowTime - LastTime).count();
+		m_ShouldTerminate = !m_Server.Tick(static_cast<float>(msec));
+		auto TickTime = std::chrono::steady_clock::now() - NowTime;
+
 		if (TickTime < msPerTick)
 		{
 			// Stretch tick time until it's at least msPerTick
-			cSleep::MilliSleep((unsigned int)(msPerTick - TickTime));
+			std::this_thread::sleep_for(msPerTick - TickTime);
 		}
 
 		LastTime = NowTime;
@@ -99,53 +111,24 @@ void cServer::cTickThread::Execute(void)
 
 
 
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 // cServer:
 
 cServer::cServer(void) :
-	m_ListenThreadIPv4(*this, cSocket::IPv4, "Client IPv4"),
-	m_ListenThreadIPv6(*this, cSocket::IPv6, "Client IPv6"),
+	m_PlayerCount(0),
+	m_ClientViewDistance(0),
 	m_bIsConnected(false),
 	m_bRestarting(false),
 	m_RCONServer(*this),
-	m_TickThread(*this)
+	m_MaxPlayers(0),
+	m_bIsHardcore(false),
+	m_TickThread(*this),
+	m_ShouldAuthenticate(false),
+	m_ShouldLoadOfflinePlayerData(false),
+	m_ShouldLoadNamedPlayerData(true)
 {
-}
-
-
-
-
-
-void cServer::ClientDestroying(const cClientHandle * a_Client)
-{
-	m_SocketThreads.RemoveClient(a_Client);
-}
-
-
-
-
-
-void cServer::NotifyClientWrite(const cClientHandle * a_Client)
-{
-	m_NotifyWriteThread.NotifyClientWrite(a_Client);
-}
-
-
-
-
-
-void cServer::WriteToClient(const cClientHandle * a_Client, const AString & a_Data)
-{
-	m_SocketThreads.Write(a_Client, a_Data);
-}
-
-
-
-
-
-void cServer::RemoveClient(const cClientHandle * a_Client)
-{
-	m_SocketThreads.RemoveClient(a_Client);
+	// Initialize the LuaStateTracker singleton before the app goes multithreaded:
+	cLuaStateTracker::GetStats();
 }
 
 
@@ -162,39 +145,33 @@ void cServer::ClientMovedToWorld(const cClientHandle * a_Client)
 
 
 
-void cServer::PlayerCreated(const cPlayer * a_Player)
+void cServer::PlayerCreated()
 {
-	UNUSED(a_Player);
-	// To avoid deadlocks, the player count is not handled directly, but rather posted onto the tick thread
-	cCSLock Lock(m_CSPlayerCountDiff);
-	m_PlayerCountDiff += 1;
+	m_PlayerCount++;
 }
 
 
 
 
 
-void cServer::PlayerDestroying(const cPlayer * a_Player)
+void cServer::PlayerDestroyed()
 {
-	UNUSED(a_Player);
-	// To avoid deadlocks, the player count is not handled directly, but rather posted onto the tick thread
-	cCSLock Lock(m_CSPlayerCountDiff);
-	m_PlayerCountDiff -= 1;
+	m_PlayerCount--;
 }
 
 
 
 
 
-bool cServer::InitServer(cIniFile & a_SettingsIni)
+bool cServer::InitServer(cSettingsRepositoryInterface & a_Settings, bool a_ShouldAuth)
 {
-	m_Description = a_SettingsIni.GetValueSet("Server", "Description", "MCServer - in C++!").c_str();
-	m_MaxPlayers  = a_SettingsIni.GetValueSetI("Server", "MaxPlayers", 100);
-	m_bIsHardcore = a_SettingsIni.GetValueSetB("Server", "HardcoreEnabled", false);
-	m_PlayerCount = 0;
-	m_PlayerCountDiff = 0;
+	m_Description = a_Settings.GetValueSet("Server", "Description", "Cuberite - in C++!");
+	m_ShutdownMessage = a_Settings.GetValueSet("Server", "ShutdownMessage", "Server shutdown");
+	m_MaxPlayers = static_cast<size_t>(a_Settings.GetValueSetI("Server", "MaxPlayers", 100));
+	m_bIsHardcore = a_Settings.GetValueSetB("Server", "HardcoreEnabled", false);
+	m_bAllowMultiLogin = a_Settings.GetValueSetB("Server", "AllowMultiLogin", false);
 
-	m_FaviconData = Base64Encode(cFile::ReadWholeFile(FILE_IO_PREFIX + AString("favicon.png"))); // Will return empty string if file nonexistant; client doesn't mind
+	m_FaviconData = Base64Encode(cFile::ReadWholeFile(FILE_IO_PREFIX + AString("favicon.png")));  // Will return empty string if file nonexistant; client doesn't mind
 
 	if (m_bIsConnected)
 	{
@@ -205,52 +182,39 @@ bool cServer::InitServer(cIniFile & a_SettingsIni)
 	LOGINFO("Compatible clients: %s", MCS_CLIENT_VERSIONS);
 	LOGINFO("Compatible protocol versions %s", MCS_PROTOCOL_VERSIONS);
 
-	if (cSocket::WSAStartup() != 0) // Only does anything on Windows, but whatever
-	{
-		LOGERROR("WSAStartup() != 0");
-		return false;
-	}
+	m_Ports = ReadUpgradeIniPorts(a_Settings, "Server", "Ports", "Port", "PortsIPv6", "25565");
 
-	bool HasAnyPorts = false;
-	AString Ports = a_SettingsIni.GetValueSet("Server", "Port", "25565");
-	m_ListenThreadIPv4.SetReuseAddr(true);
-	if (m_ListenThreadIPv4.Initialize(Ports))
-	{
-		HasAnyPorts = true;
-	}
-
-	Ports = a_SettingsIni.GetValueSet("Server", "PortsIPv6", "25565");
-	m_ListenThreadIPv6.SetReuseAddr(true);
-	if (m_ListenThreadIPv6.Initialize(Ports))
-	{
-		HasAnyPorts = true;
-	}
-	
-	if (!HasAnyPorts)
-	{
-		LOGERROR("Couldn't open any ports. Aborting the server");
-		return false;
-	}
-
-	m_RCONServer.Initialize(a_SettingsIni);
+	m_RCONServer.Initialize(a_Settings);
 
 	m_bIsConnected = true;
 
 	m_ServerID = "-";
-	m_ShouldAuthenticate = a_SettingsIni.GetValueSetB("Authentication", "Authenticate", true);
+	m_ShouldAuthenticate = a_ShouldAuth;
 	if (m_ShouldAuthenticate)
 	{
-		MTRand mtrand1;
-		unsigned int r1 = (mtrand1.randInt() % 1147483647) + 1000000000;
-		unsigned int r2 = (mtrand1.randInt() % 1147483647) + 1000000000;
+		auto & rand = GetRandomProvider();
+		unsigned int r1 = rand.RandInt<unsigned int>(1000000000U, 0x7fffffffU);
+		unsigned int r2 = rand.RandInt<unsigned int>(1000000000U, 0x7fffffffU);
 		std::ostringstream sid;
 		sid << std::hex << r1;
 		sid << std::hex << r2;
 		m_ServerID = sid.str();
 		m_ServerID.resize(16, '0');
 	}
-	
-	m_ClientViewDistance = a_SettingsIni.GetValueSetI("Server", "DefaultViewDistance", cClientHandle::DEFAULT_VIEW_DISTANCE);
+
+	// Check if both BungeeCord and online mode are on, if so, warn the admin:
+	m_ShouldAllowBungeeCord = a_Settings.GetValueSetB("Authentication", "AllowBungeeCord", false);
+	if (m_ShouldAllowBungeeCord && m_ShouldAuthenticate)
+	{
+		LOGWARNING("WARNING: BungeeCord is allowed and server set to online mode. This is unsafe and will not work properly. Disable either authentication or BungeeCord in settings.ini.");
+	}
+
+	m_ShouldAllowMultiWorldTabCompletion = a_Settings.GetValueSetB("Server", "AllowMultiWorldTabCompletion", true);
+	m_ShouldLimitPlayerBlockChanges = a_Settings.GetValueSetB("AntiCheat", "LimitPlayerBlockChanges", true);
+	m_ShouldLoadOfflinePlayerData = a_Settings.GetValueSetB("PlayerData", "LoadOfflinePlayerData", false);
+	m_ShouldLoadNamedPlayerData   = a_Settings.GetValueSetB("PlayerData", "LoadNamedPlayerData", true);
+
+	m_ClientViewDistance = a_Settings.GetValueSetI("Server", "DefaultViewDistance", cClientHandle::DEFAULT_VIEW_DISTANCE);
 	if (m_ClientViewDistance < cClientHandle::MIN_VIEW_DISTANCE)
 	{
 		m_ClientViewDistance = cClientHandle::MIN_VIEW_DISTANCE;
@@ -261,11 +225,9 @@ bool cServer::InitServer(cIniFile & a_SettingsIni)
 		m_ClientViewDistance = cClientHandle::MAX_VIEW_DISTANCE;
 		LOGINFO("Setting default viewdistance to the maximum of %d", m_ClientViewDistance);
 	}
-	
-	m_NotifyWriteThread.Start(this);
-	
+
 	PrepareKeys();
-	
+
 	return true;
 }
 
@@ -273,10 +235,70 @@ bool cServer::InitServer(cIniFile & a_SettingsIni)
 
 
 
-int cServer::GetNumPlayers(void)
+bool cServer::RegisterForgeMod(const AString & a_ModName, const AString & a_ModVersion, UInt32 a_ProtocolVersionNumber)
 {
-	cCSLock Lock(m_CSPlayerCount);
-	return m_PlayerCount;
+	auto & Mods = RegisteredForgeMods(a_ProtocolVersionNumber);
+
+	return Mods.insert({a_ModName, a_ModVersion}).second;
+}
+
+
+
+
+
+void cServer::UnregisterForgeMod(const AString & a_ModName, UInt32 a_ProtocolVersionNumber)
+{
+	auto & Mods = RegisteredForgeMods(a_ProtocolVersionNumber);
+
+	auto it = Mods.find(a_ModName);
+	if (it != Mods.end())
+	{
+		Mods.erase(it);
+	}
+}
+
+
+
+
+
+AStringMap & cServer::RegisteredForgeMods(const UInt32 a_Protocol)
+{
+	auto it = m_ForgeModsByVersion.find(a_Protocol);
+
+	if (it == m_ForgeModsByVersion.end())
+	{
+		AStringMap mods;
+		m_ForgeModsByVersion.insert({a_Protocol, mods});
+		return m_ForgeModsByVersion.find(a_Protocol)->second;
+	}
+
+	return it->second;
+}
+
+
+
+
+
+const AStringMap & cServer::GetRegisteredForgeMods(const UInt32 a_Protocol)
+{
+	return RegisteredForgeMods(a_Protocol);
+}
+
+
+
+
+
+bool cServer::IsPlayerInQueue(AString a_Username)
+{
+	cCSLock Lock(m_CSClients);
+	for (auto client : m_Clients)
+	{
+		if ((client->GetUsername()).compare(a_Username) == 0)
+		{
+			return true;
+		}
+	}
+	return false;
 }
 
 
@@ -294,35 +316,14 @@ void cServer::PrepareKeys(void)
 
 
 
-void cServer::OnConnectionAccepted(cSocket & a_Socket)
+cTCPLink::cCallbacksPtr cServer::OnConnectionAccepted(const AString & a_RemoteIPAddress)
 {
-	if (!a_Socket.IsValid())
-	{
-		return;
-	}
-	
-	const AString & ClientIP = a_Socket.GetIPString();
-	if (ClientIP.empty())
-	{
-		LOGWARN("cServer: A client connected, but didn't present its IP, disconnecting.");
-		a_Socket.CloseSocket();
-		return;
-	}
-
-	LOGD("Client \"%s\" connected!", ClientIP.c_str());
-
-	cClientHandle * NewHandle = new cClientHandle(&a_Socket, m_ClientViewDistance);
-	if (!m_SocketThreads.AddClient(a_Socket, NewHandle))
-	{
-		// For some reason SocketThreads have rejected the handle, clean it up
-		LOGERROR("Client \"%s\" cannot be handled, server probably unstable", ClientIP.c_str());
-		a_Socket.CloseSocket();
-		delete NewHandle;
-		return;
-	}
-	
+	LOGD("Client \"%s\" connected!", a_RemoteIPAddress.c_str());
+	cClientHandlePtr NewHandle = std::make_shared<cClientHandle>(a_RemoteIPAddress, m_ClientViewDistance);
+	NewHandle->SetSelf(NewHandle);
 	cCSLock Lock(m_CSClients);
 	m_Clients.push_back(NewHandle);
+	return NewHandle;
 }
 
 
@@ -331,23 +332,12 @@ void cServer::OnConnectionAccepted(cSocket & a_Socket)
 
 bool cServer::Tick(float a_Dt)
 {
-	// Apply the queued playercount adjustments (postponed to avoid deadlocks)
-	int PlayerCountDiff = 0;
-	{
-		cCSLock Lock(m_CSPlayerCountDiff);
-		std::swap(PlayerCountDiff, m_PlayerCountDiff);
-	}
-	{
-		cCSLock Lock(m_CSPlayerCount);
-		m_PlayerCount += PlayerCountDiff;
-	}
-	
 	// Send the tick to the plugins, as well as let the plugin manager reload, if asked to (issue #102):
 	cPluginManager::Get()->Tick(a_Dt);
-	
+
 	// Let the Root process all the queued commands:
 	cRoot::Get()->TickCommands();
-	
+
 	// Tick all clients not yet assigned to a world:
 	TickClients(a_Dt);
 
@@ -369,23 +359,30 @@ bool cServer::Tick(float a_Dt)
 
 void cServer::TickClients(float a_Dt)
 {
-	cClientHandleList RemoveClients;
+	cClientHandlePtrs RemoveClients;
 	{
 		cCSLock Lock(m_CSClients);
-		
+
 		// Remove clients that have moved to a world (the world will be ticking them from now on)
-		for (cClientHandleList::const_iterator itr = m_ClientsToRemove.begin(), end = m_ClientsToRemove.end(); itr != end; ++itr)
+		for (auto itr = m_ClientsToRemove.begin(), end = m_ClientsToRemove.end(); itr != end; ++itr)
 		{
-			m_Clients.remove(*itr);
+			for (auto itrC = m_Clients.begin(), endC = m_Clients.end(); itrC != endC; ++itrC)
+			{
+				if (itrC->get() == *itr)
+				{
+					m_Clients.erase(itrC);
+					break;
+				}
+			}
 		}  // for itr - m_ClientsToRemove[]
 		m_ClientsToRemove.clear();
-		
+
 		// Tick the remaining clients, take out those that have been destroyed into RemoveClients
-		for (cClientHandleList::iterator itr = m_Clients.begin(); itr != m_Clients.end();)
+		for (auto itr = m_Clients.begin(); itr != m_Clients.end();)
 		{
 			if ((*itr)->IsDestroyed())
 			{
-				// Remove the client later, when CS is not held, to avoid deadlock ( http://forum.mc-server.org/showthread.php?tid=374 )
+				// Delete the client later, when CS is not held, to avoid deadlock: https://forum.cuberite.org/thread-374.html
 				RemoveClients.push_back(*itr);
 				itr = m_Clients.erase(itr);
 				continue;
@@ -394,12 +391,9 @@ void cServer::TickClients(float a_Dt)
 			++itr;
 		}  // for itr - m_Clients[]
 	}
-	
+
 	// Delete the clients that have been destroyed
-	for (cClientHandleList::iterator itr = RemoveClients.begin(); itr != RemoveClients.end(); ++itr)
-	{
-		delete *itr;
-	} // for itr - RemoveClients[]
+	RemoveClients.clear();
 }
 
 
@@ -408,12 +402,23 @@ void cServer::TickClients(float a_Dt)
 
 bool cServer::Start(void)
 {
-	if (!m_ListenThreadIPv4.Start())
+	for (auto port: m_Ports)
 	{
-		return false;
-	}
-	if (!m_ListenThreadIPv6.Start())
+		UInt16 PortNum;
+		if (!StringToInteger(port, PortNum))
+		{
+			LOGWARNING("Invalid port specified for server: \"%s\". Ignoring.", port.c_str());
+			continue;
+		}
+		auto Handle = cNetwork::Listen(PortNum, std::make_shared<cServerListenCallbacks>(*this, PortNum));
+		if (Handle->IsListening())
+		{
+			m_ServerHandles.push_back(Handle);
+		}
+	}  // for port - Ports[]
+	if (m_ServerHandles.empty())
 	{
+		LOGERROR("Couldn't open any ports. Aborting the server");
 		return false;
 	}
 	if (!m_TickThread.Start())
@@ -429,7 +434,7 @@ bool cServer::Start(void)
 
 bool cServer::Command(cClientHandle & a_Client, AString & a_Cmd)
 {
-	return cRoot::Get()->GetPluginManager()->CallHookChat(a_Client.GetPlayer(), a_Cmd);
+	return cRoot::Get()->GetPluginManager()->CallHookChat(*(a_Client.GetPlayer()), a_Cmd);
 }
 
 
@@ -444,54 +449,97 @@ void cServer::ExecuteConsoleCommand(const AString & a_Cmd, cCommandOutputCallbac
 		return;
 	}
 
-	// Special handling: "stop" and "restart" are built in
-	if ((split[0].compare("stop") == 0) || (split[0].compare("restart") == 0))
-	{
-		return;
-	}
-	
+	// "stop" and "restart" are handled in cRoot::ExecuteConsoleCommand, our caller, due to its access to controlling variables
+
 	// "help" and "reload" are to be handled by MCS, so that they work no matter what
 	if (split[0] == "help")
 	{
 		PrintHelp(split, a_Output);
+		a_Output.Finished();
 		return;
 	}
-	if (split[0] == "reload")
+	else if (split[0] == "reload")
 	{
 		cPluginManager::Get()->ReloadPlugins();
+		a_Output.Finished();
 		return;
 	}
-	
+	else if (split[0] == "reloadplugins")
+	{
+		cPluginManager::Get()->ReloadPlugins();
+		a_Output.Out("Plugins reloaded");
+		a_Output.Finished();
+		return;
+	}
+	else if (split[0] == "load")
+	{
+		if (split.size() > 1)
+		{
+			cPluginManager::Get()->RefreshPluginList();  // Refresh the plugin list, so that if the plugin was added just now, it is loadable
+			a_Output.Out(cPluginManager::Get()->LoadPlugin(split[1]) ? "Plugin loaded" : "Error occurred loading plugin");
+		}
+		else
+		{
+			a_Output.Out("Usage: load <PluginFolder>");
+		}
+		a_Output.Finished();
+		return;
+	}
+	else if (split[0] == "unload")
+	{
+		if (split.size() > 1)
+		{
+			cPluginManager::Get()->UnloadPlugin(split[1]);
+			a_Output.Out("Plugin unload scheduled");
+		}
+		else
+		{
+			a_Output.Out("Usage: unload <PluginFolder>");
+		}
+		a_Output.Finished();
+		return;
+	}
+	if (split[0] == "destroyentities")
+	{
+		cRoot::Get()->ForEachWorld([](cWorld & a_World)
+			{
+				a_World.ForEachEntity([](cEntity & a_Entity)
+					{
+						if (!a_Entity.IsPlayer())
+						{
+							a_Entity.Destroy();
+						}
+						return false;
+					}
+				);
+				return false;
+			}
+		);
+		a_Output.Out("Destroyed all entities");
+		a_Output.Finished();
+		return;
+	}
+
 	// There is currently no way a plugin can do these (and probably won't ever be):
-	if (split[0].compare("chunkstats") == 0)
+	else if (split[0].compare("chunkstats") == 0)
 	{
 		cRoot::Get()->LogChunkStats(a_Output);
 		a_Output.Finished();
 		return;
 	}
-	#if defined(_MSC_VER) && defined(_DEBUG) && defined(ENABLE_LEAK_FINDER)
-	if (split[0].compare("dumpmem") == 0)
+
+	else if (split[0].compare("luastats") == 0)
 	{
-		LeakFinderXmlOutput Output("memdump.xml");
-		DumpUsedMemory(&Output);
+		a_Output.Out(cLuaStateTracker::GetStats());
+		a_Output.Finished();
 		return;
 	}
-	
-	if (split[0].compare("killmem") == 0)
-	{
-		for (;;)
-		{
-			new char[100 * 1024 * 1024];  // Allocate and leak 100 MiB in a loop -> fill memory and kill MCS
-		}
-	}
-	#endif
-
-	if (cPluginManager::Get()->ExecuteConsoleCommand(split, a_Output))
+	else if (cPluginManager::Get()->ExecuteConsoleCommand(split, a_Output, a_Cmd))
 	{
 		a_Output.Finished();
 		return;
 	}
-	
+
 	a_Output.Out("Unknown command, type 'help' for all commands.");
 	a_Output.Finished();
 }
@@ -505,13 +553,13 @@ void cServer::PrintHelp(const AStringVector & a_Split, cCommandOutputCallback & 
 	UNUSED(a_Split);
 	typedef std::pair<AString, AString> AStringPair;
 	typedef std::vector<AStringPair> AStringPairs;
-	
+
 	class cCallback :
 		public cPluginManager::cCommandEnumCallback
 	{
 	public:
 		cCallback(void) : m_MaxLen(0) {}
-		
+
 		virtual bool Command(const AString & a_Command, const cPlugin * a_Plugin, const AString & a_Permission, const AString & a_HelpString) override
 		{
 		UNUSED(a_Plugin);
@@ -526,7 +574,7 @@ void cServer::PrintHelp(const AStringVector & a_Split, cCommandOutputCallback & 
 			}
 			return false;
 		}
-		
+
 		AStringPairs m_Commands;
 		size_t m_MaxLen;
 	} Callback;
@@ -535,9 +583,8 @@ void cServer::PrintHelp(const AStringVector & a_Split, cCommandOutputCallback & 
 	for (AStringPairs::const_iterator itr = Callback.m_Commands.begin(), end = Callback.m_Commands.end(); itr != end; ++itr)
 	{
 		const AStringPair & cmd = *itr;
-		a_Output.Out(Printf("%-*s%s\n", Callback.m_MaxLen, cmd.first.c_str(), cmd.second.c_str()));
+		a_Output.Out(Printf("%-*s - %s\n", static_cast<int>(Callback.m_MaxLen), cmd.first.c_str(), cmd.second.c_str()));
 	}  // for itr - Callback.m_Commands[]
-	a_Output.Finished();
 }
 
 
@@ -546,15 +593,32 @@ void cServer::PrintHelp(const AStringVector & a_Split, cCommandOutputCallback & 
 
 void cServer::BindBuiltInConsoleCommands(void)
 {
+	// Create an empty handler - the actual handling for the commands is performed before they are handed off to cPluginManager
+	class cEmptyHandler:
+		public cPluginManager::cCommandHandler
+	{
+		virtual bool ExecuteCommand(
+			const AStringVector & a_Split,
+			cPlayer * a_Player,
+			const AString & a_Command,
+			cCommandOutputCallback * a_Output = nullptr
+		) override
+		{
+			return false;
+		}
+	};
+	auto handler = std::make_shared<cEmptyHandler>();
+
+	// Register internal commands:
 	cPluginManager * PlgMgr = cPluginManager::Get();
-	PlgMgr->BindConsoleCommand("help", NULL, " - Shows the available commands");
-	PlgMgr->BindConsoleCommand("reload", NULL, " - Reloads all plugins");
-	PlgMgr->BindConsoleCommand("restart", NULL, " - Restarts the server cleanly");
-	PlgMgr->BindConsoleCommand("stop", NULL, " - Stops the server cleanly");
-	PlgMgr->BindConsoleCommand("chunkstats", NULL, " - Displays detailed chunk memory statistics");
-	#if defined(_MSC_VER) && defined(_DEBUG) && defined(ENABLE_LEAK_FINDER)
-	PlgMgr->BindConsoleCommand("dumpmem", NULL, " - Dumps all used memory blocks together with their callstacks into memdump.xml");
-	#endif
+	PlgMgr->BindConsoleCommand("help",            nullptr, handler, "Shows the available commands");
+	PlgMgr->BindConsoleCommand("reload",          nullptr, handler, "Reloads all plugins");
+	PlgMgr->BindConsoleCommand("restart",         nullptr, handler, "Restarts the server cleanly");
+	PlgMgr->BindConsoleCommand("stop",            nullptr, handler, "Stops the server cleanly");
+	PlgMgr->BindConsoleCommand("chunkstats",      nullptr, handler, "Displays detailed chunk memory statistics");
+	PlgMgr->BindConsoleCommand("load",            nullptr, handler, "Adds and enables the specified plugin");
+	PlgMgr->BindConsoleCommand("unload",          nullptr, handler, "Disables the specified plugin");
+	PlgMgr->BindConsoleCommand("destroyentities", nullptr, handler, "Destroys all entities in all worlds");
 }
 
 
@@ -563,19 +627,24 @@ void cServer::BindBuiltInConsoleCommands(void)
 
 void cServer::Shutdown(void)
 {
-	m_ListenThreadIPv4.Stop();
-	m_ListenThreadIPv6.Stop();
-	
+	// Stop listening on all sockets:
+	for (auto srv: m_ServerHandles)
+	{
+		srv->Close();
+	}
+	m_ServerHandles.clear();
+
+	// Notify the tick thread and wait for it to terminate:
 	m_bRestarting = true;
 	m_RestartEvent.Wait();
 
 	cRoot::Get()->SaveAllChunks();
 
+	// Remove all clients:
 	cCSLock Lock(m_CSClients);
-	for( ClientList::iterator itr = m_Clients.begin(); itr != m_Clients.end(); ++itr )
+	for (auto itr = m_Clients.begin(); itr != m_Clients.end(); ++itr)
 	{
 		(*itr)->Destroy();
-		delete *itr;
 	}
 	m_Clients.clear();
 }
@@ -587,7 +656,7 @@ void cServer::Shutdown(void)
 void cServer::KickUser(int a_ClientID, const AString & a_Reason)
 {
 	cCSLock Lock(m_CSClients);
-	for (ClientList::iterator itr = m_Clients.begin(); itr != m_Clients.end(); ++itr)
+	for (auto itr = m_Clients.begin(); itr != m_Clients.end(); ++itr)
 	{
 		if ((*itr)->GetUniqueID() == a_ClientID)
 		{
@@ -600,98 +669,27 @@ void cServer::KickUser(int a_ClientID, const AString & a_Reason)
 
 
 
-void cServer::AuthenticateUser(int a_ClientID)
+void cServer::AuthenticateUser(int a_ClientID, const AString & a_Name, const cUUID & a_UUID, const Json::Value & a_Properties)
 {
 	cCSLock Lock(m_CSClients);
-	for (ClientList::iterator itr = m_Clients.begin(); itr != m_Clients.end(); ++itr)
+
+	// Check max players condition within lock (expect server and authenticator thread to both call here)
+	if (GetNumPlayers() >= GetMaxPlayers())
+	{
+		KickUser(a_ClientID, "The server is currently full :(" "\n" "Try again later?");
+		return;
+	}
+
+	for (auto itr = m_Clients.begin(); itr != m_Clients.end(); ++itr)
 	{
 		if ((*itr)->GetUniqueID() == a_ClientID)
 		{
-			(*itr)->Authenticate();
+			(*itr)->Authenticate(a_Name, a_UUID, a_Properties);
 			return;
 		}
 	}  // for itr - m_Clients[]
 }
 
-
-
-
-
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// cServer::cNotifyWriteThread:
-
-cServer::cNotifyWriteThread::cNotifyWriteThread(void) :
-	super("ClientPacketThread"),
-	m_Server(NULL)
-{
-}
-
-
-
-
-
-cServer::cNotifyWriteThread::~cNotifyWriteThread()
-{
-	m_ShouldTerminate = true;
-	m_Event.Set();
-	Wait();
-}
-
-
-
-
-
-bool cServer::cNotifyWriteThread::Start(cServer * a_Server)
-{
-	m_Server = a_Server;
-	return super::Start();
-}
-
-
-
-
-
-void cServer::cNotifyWriteThread::Execute(void)
-{
-	cClientHandleList Clients;
-	while (!m_ShouldTerminate)
-	{
-		cCSLock Lock(m_CS);
-		while (m_Clients.size() == 0)
-		{
-			cCSUnlock Unlock(Lock);
-			m_Event.Wait();
-			if (m_ShouldTerminate)
-			{
-				return;
-			}
-		}
-		
-		// Copy the clients to notify and unlock the CS:
-		Clients.splice(Clients.begin(), m_Clients);
-		Lock.Unlock();
-		
-		for (cClientHandleList::iterator itr = Clients.begin(); itr != Clients.end(); ++itr)
-		{
-			m_Server->m_SocketThreads.NotifyWrite(*itr);
-		}  // for itr - Clients[]
-		Clients.clear();
-	}  // while (!mShouldTerminate)
-}
-
-
-
-
-
-void cServer::cNotifyWriteThread::NotifyClientWrite(const cClientHandle * a_Client)
-{
-	{
-		cCSLock Lock(m_CS);
-		m_Clients.remove(const_cast<cClientHandle *>(a_Client));  // Put it there only once
-		m_Clients.push_back(const_cast<cClientHandle *>(a_Client));
-	}
-	m_Event.Set();
-}
 
 
 

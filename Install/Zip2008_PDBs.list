@@ -1,2 +1,3 @@
-MCServer\*.pdb
+Server\*.pdb
+Server\buildinfo.txt
 src\Bindings\Bindings.*

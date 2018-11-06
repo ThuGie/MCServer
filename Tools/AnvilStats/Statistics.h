@@ -31,21 +31,23 @@ public:
 		UInt64 m_NumEntities;
 		UInt64 m_NumTileEntities;
 		UInt64 m_NumTileTicks;
+		UInt64 m_PerHeightBlockCounts[256][256];  // First dimension is the height, second dimension is BlockType
+		UInt64 m_PerHeightSpawners[256][entMax + 1];  // First dimension is the height, second dimension is spawned entity type
 		int m_MinChunkX, m_MaxChunkX;  // X coords range
 		int m_MinChunkZ, m_MaxChunkZ;  // Z coords range
-		
+
 		Int64 m;
 		UInt64 m_SpawnerEntity[entMax + 1];
-		
+
 		cStats(void);
 		void Add(const cStats & a_Stats);
 		void UpdateCoordsRange(int a_ChunkX, int a_ChunkZ);
 	} ;
-	
+
 	cStatistics(void);
-	
+
 	const cStats & GetStats(void) const { return m_Stats; }
-	
+
 protected:
 	cStats m_Stats;
 
@@ -71,9 +73,11 @@ protected:
 		const NIBBLETYPE * a_BlockLight,
 		const NIBBLETYPE * a_BlockSkyLight
 	) override;
-	
+
 	virtual bool OnEmptySection(unsigned char a_Y) override;
-	
+
+	virtual bool OnSectionsFinished(void) override { return false; }  // continue processing
+
 	virtual bool OnEntity(
 		const AString & a_EntityType,
 		double a_PosX, double a_PosY, double a_PosZ,
@@ -86,20 +90,20 @@ protected:
 		cParsedNBT & a_NBT,
 		int a_NBTTag
 	) override;
-	
+
 	virtual bool OnTileEntity(
 		const AString & a_EntityType,
 		int a_PosX, int a_PosY, int a_PosZ,
 		cParsedNBT & a_NBT,
 		int a_NBTTag
 	) override;
-	
+
 	virtual bool OnTileTick(
 		int a_BlockType,
 		int a_TicksLeft,
 		int a_PosX, int a_PosY, int a_PosZ
 	) override;
-	
+
 	void OnSpawner(cParsedNBT & a_NBT, int a_TileEntityTag);
 } ;
 
@@ -113,26 +117,24 @@ class cStatisticsFactory :
 public:
 	cStatisticsFactory(void);
 	virtual ~cStatisticsFactory();
-	
+
 	virtual cCallback * CreateNewCallback(void)
 	{
 		return new cStatistics;
 	}
-	
+
 protected:
 	// The results, combined, are stored here:
 	cStatistics::cStats m_CombinedStats;
-	
+
 	clock_t m_BeginTick;
 
 	void JoinResults(void);
 	void SaveBiomes(void);
 	void SaveBlockTypes(void);
+	void SavePerHeightBlockTypes(void);
 	void SaveBiomeBlockTypes(void);
 	void SaveStatistics(void);
 	void SaveSpawners(void);
+	void SavePerHeightSpawners(void);
 } ;
-
-
-
-

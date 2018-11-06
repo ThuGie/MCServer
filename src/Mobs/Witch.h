@@ -11,13 +11,13 @@ class cWitch :
 	public cAggressiveMonster
 {
 	typedef cAggressiveMonster super;
-	
+
 public:
 	cWitch();
 
-	CLASS_PROTODEF(cWitch);
+	CLASS_PROTODEF(cWitch)
 
-	virtual void GetDrops(cItems & a_Drops, cEntity * a_Killer = NULL) override;
+	virtual void GetDrops(cItems & a_Drops, cEntity * a_Killer = nullptr) override;
 
 	bool IsAngry(void) const {return ((m_EMState == ATTACKING) || (m_EMState == CHASING)); }
 } ;

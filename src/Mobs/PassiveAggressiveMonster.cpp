@@ -9,7 +9,7 @@
 
 
 
-cPassiveAggressiveMonster::cPassiveAggressiveMonster(const AString & a_ConfigName, eType a_MobType, const AString & a_SoundHurt, const AString & a_SoundDeath, double a_Width, double a_Height) :
+cPassiveAggressiveMonster::cPassiveAggressiveMonster(const AString & a_ConfigName, eMonsterType a_MobType, const AString & a_SoundHurt, const AString & a_SoundDeath, double a_Width, double a_Height) :
 	super(a_ConfigName, a_MobType, a_SoundHurt, a_SoundDeath, a_Width, a_Height)
 {
 	m_EMPersonality = PASSIVE;
@@ -19,19 +19,30 @@ cPassiveAggressiveMonster::cPassiveAggressiveMonster(const AString & a_ConfigNam
 
 
 
-void cPassiveAggressiveMonster::DoTakeDamage(TakeDamageInfo & a_TDI)
+bool cPassiveAggressiveMonster::DoTakeDamage(TakeDamageInfo & a_TDI)
 {
-	super::DoTakeDamage(a_TDI);
-	
-	if ((m_Target != NULL) && (m_Target->IsPlayer()))
+	if (!super::DoTakeDamage(a_TDI))
 	{
-		if (!((cPlayer *)m_Target)->IsGameModeCreative())
+		return false;
+	}
+
+	if ((GetTarget() != nullptr) && (GetTarget()->IsPlayer()))
+	{
+		if (static_cast<cPlayer *>(GetTarget())->CanMobsTarget())
 		{
 			m_EMState = CHASING;
 		}
 	}
+	return true;
 }
 
 
+
+
+
+void cPassiveAggressiveMonster::EventSeePlayer(cPlayer *, cChunk & a_Chunk)
+{
+	// don't do anything, neutral mobs don't react to just seeing the player
+}
 
 

@@ -16,10 +16,13 @@
 // tolua_begin
 /** Biome IDs
 The first batch corresponds to the clientside biomes, used by MineCraft.
-BiomeIDs over 255 are used by MCServer internally and are translated to MC biomes before sending them to client
+BiomeIDs over 255 are used by Cuberite internally and are translated to MC biomes before sending them to client
 */
 enum EMCSBiome
 {
+	biInvalidBiome     = -1,
+
+	biFirstBiome       = 0,
 	biOcean            = 0,
 	biPlains           = 1,
 	biDesert           = 2,
@@ -46,7 +49,7 @@ enum EMCSBiome
 	biExtremeHillsEdge = 20,
 	biJungle           = 21,
 	biJungleHills      = 22,
-	
+
 	// Release 1.7 biomes:
 	biJungleEdge       = 23,
 	biDeepOcean        = 24,
@@ -65,15 +68,16 @@ enum EMCSBiome
 	biMesa             = 37,
 	biMesaPlateauF     = 38,
 	biMesaPlateau      = 39,
-	
+
 	// Automatically capture the maximum consecutive biome value into biMaxBiome:
 	biNumBiomes,  // True number of biomes, since they are zero-based
 	biMaxBiome = biNumBiomes - 1,  // The maximum biome value
-	
+
 	// Add this number to the biomes to get the variant
 	biVariant = 128,
-	
+
 	// Release 1.7 biome variants:
+	biFirstVariantBiome    = 129,
 	biSunflowerPlains      = 129,
 	biDesertM              = 130,
 	biExtremeHillsM        = 131,
@@ -95,13 +99,59 @@ enum EMCSBiome
 	biMesaBryce            = 165,
 	biMesaPlateauFM        = 166,
 	biMesaPlateauM         = 167,
+	// Automatically capture the maximum consecutive biome value into biVarientMaxBiome:
+	biNumVariantBiomes,  // True number of biomes, since they are zero-based
+	biMaxVariantBiome = biNumVariantBiomes - 1,  // The maximum biome value
 } ;
 
-/// Translates a biome string to biome enum. Takes either a number or a biome alias (built-in). Returns -1 on failure.
+// tolua_end
+
+
+
+
+
+/** Hash for EMCSBiome, so that it can be used in std::unordered_map etc. */
+struct BiomeHasher
+{
+public:
+	std::size_t operator() (const EMCSBiome a_Biome) const
+	{
+		return static_cast<std::size_t>(a_Biome);
+	}
+};
+
+
+
+
+
+// tolua_begin
+
+/** Translates a biome string to biome enum. Takes either a number or a biome alias (built-in). Returns biInvalidBiome on failure. */
 extern EMCSBiome StringToBiome(const AString & a_BiomeString);
 
-/// Returns true if the biome has no downfall - deserts and savannas
+/** Translates biome enum into biome string. Returns empty string on failure (unknown biome). */
+extern AString BiomeToString(int a_Biome);
+
+/** Returns true if the biome has no downfall - deserts and savannas */
 extern bool IsBiomeNoDownfall(EMCSBiome a_Biome);
 
+/** Returns true if the biome is an ocean biome. */
+inline bool IsBiomeOcean(int a_Biome)
+{
+	return ((a_Biome == biOcean) || (a_Biome == biDeepOcean));
+}
+
+/** Returns true if the biome is very cold
+(has snow on ground everywhere, turns top water to ice, has snowfall instead of rain everywhere).
+Doesn't report mildly cold biomes (where it snows above certain elevation), use IsBiomeCold() for those. */
+extern bool IsBiomeVeryCold(EMCSBiome a_Biome);
+
+/** Returns true if the biome is cold
+(has snow and snowfall at higher elevations but not at regular heights).
+Doesn't report Very Cold biomes, use IsBiomeVeryCold() for those. */
+extern bool IsBiomeCold(EMCSBiome a_Biome);
+
+/** Returns the height when a biome when a biome starts snowing. */
+extern int GetSnowStartHeight(EMCSBiome a_Biome);
 
 // tolua_end

@@ -1,11 +1,49 @@
 
-cmake_minimum_required (VERSION 2.6)
-project (MCServer)
-
-include_directories ("${PROJECT_SOURCE_DIR}/../")
-
-file(GLOB SOURCE
-    "*.cpp"
+SET (SRCS
+	BeaconEntity.cpp
+	BedEntity.cpp
+	BlockEntity.cpp
+	BlockEntityWithItems.cpp
+	BrewingstandEntity.cpp
+	ChestEntity.cpp
+	CommandBlockEntity.cpp
+	DispenserEntity.cpp
+	DropSpenserEntity.cpp
+	DropperEntity.cpp
+	EnderChestEntity.cpp
+	FlowerPotEntity.cpp
+	FurnaceEntity.cpp
+	HopperEntity.cpp
+	JukeboxEntity.cpp
+	MobHeadEntity.cpp
+	MobSpawnerEntity.cpp
+	NoteEntity.cpp
+	SignEntity.cpp
 )
 
-add_library(BlockEntities ${SOURCE})
+SET (HDRS
+	BeaconEntity.h
+	BedEntity.h
+	BlockEntity.h
+	BlockEntityWithItems.h
+	BrewingstandEntity.h
+	ChestEntity.h
+	CommandBlockEntity.h
+	DispenserEntity.h
+	DropSpenserEntity.h
+	DropperEntity.h
+	EnderChestEntity.h
+	FlowerPotEntity.h
+	FurnaceEntity.h
+	HopperEntity.h
+	JukeboxEntity.h
+	MobHeadEntity.h
+	MobSpawnerEntity.h
+	NoteEntity.h
+	SignEntity.h
+)
+
+if(NOT MSVC)
+	add_library(BlockEntities ${SRCS} ${HDRS})
+	target_link_libraries(BlockEntities fmt::fmt)
+endif()

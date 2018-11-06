@@ -19,9 +19,9 @@ void cMobCensus::CollectMob(cMonster & a_Monster, cChunk & a_Chunk, double a_Dis
 
 bool cMobCensus::IsCapped(cMonster::eFamily a_MobFamily)
 {
-	const int ratio = 319; // this should be 256 as we are only supposed to take account from chunks that are in 17x17 from a player
-	// but for now, we use all chunks loaded by players. that means 19 x 19 chunks. That's why we use 256 * (19*19) / (17*17) = 319
-	// MG TODO : code the correct count	
+	const int ratio = 319;  // This should be 256 as we are only supposed to take account from chunks that are in 17 x 17 from a player
+	// but for now, we use all chunks loaded by players. that means 19 x 19 chunks. That's why we use 256 * (19 * 19) / (17 * 17) = 319
+	// MG TODO : code the correct count
 	if ((GetCapMultiplier(a_MobFamily) * GetNumChunks()) / ratio >= m_MobFamilyCollecter.GetNumberOfCollectedMobs(a_MobFamily))
 	{
 		return false;
@@ -41,12 +41,14 @@ int cMobCensus::GetCapMultiplier(cMonster::eFamily a_MobFamily)
 		case cMonster::mfPassive: return 11;
 		case cMonster::mfAmbient: return 16;
 		case cMonster::mfWater:   return 5;
-		default:
+		case cMonster::mfNoSpawn:
+		case cMonster::mfUnhandled:
 		{
 			ASSERT(!"Unhandled mob family");
 			return -1;
 		}
 	}
+	UNREACHABLE("Unsupported mob family");
 }
 
 
@@ -64,7 +66,7 @@ void cMobCensus::CollectSpawnableChunk(cChunk & a_Chunk)
 
 int cMobCensus::GetNumChunks(void)
 {
-	return m_EligibleForSpawnChunks.size();
+	return static_cast<int>(m_EligibleForSpawnChunks.size());
 }
 
 

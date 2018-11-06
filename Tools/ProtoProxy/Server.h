@@ -9,6 +9,8 @@
 
 #pragma once
 
+#include "mbedTLS++/RsaPrivateKey.h"
+
 
 
 
@@ -17,22 +19,18 @@
 class cServer
 {
 	SOCKET m_ListenSocket;
-	cRSAPrivateKey m_PrivateKey;
+	cRsaPrivateKey m_PrivateKey;
 	AString m_PublicKeyDER;
-	short m_ConnectPort;
-	
+	UInt16 m_ConnectPort;
+
 public:
 	cServer(void);
-	
-	int  Init(short a_ListenPort, short a_ConnectPort);
+
+	int  Init(UInt16 a_ListenPort, UInt16 a_ConnectPort);
 	void Run(void);
-	
-	cRSAPrivateKey & GetPrivateKey(void) { return m_PrivateKey; }
+
+	cRsaPrivateKey & GetPrivateKey(void) { return m_PrivateKey; }
 	const AString & GetPublicKeyDER (void) { return m_PublicKeyDER; }
-	
-	short GetConnectPort(void) const { return m_ConnectPort; }
+
+	UInt16 GetConnectPort(void) const { return m_ConnectPort; }
 } ;
-
-
-
-

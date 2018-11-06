@@ -1,40 +1,42 @@
 
 #pragma once
 
+#undef  ntohll
+#define ntohll(x) (((static_cast<UInt64>(ntohl(static_cast<UInt32>(x)))) << 32) + ntohl(x >> 32))
+
 
 
 
 
 // Changes endianness
-inline unsigned long long HostToNetwork8(const void* a_Value )
+inline UInt64 HostToNetwork8(const void * a_Value)
 {
-	unsigned long long __HostToNetwork8;
-	memcpy( &__HostToNetwork8, a_Value, sizeof( __HostToNetwork8 ) );
-	__HostToNetwork8 = (( ( (unsigned long long)htonl((u_long)__HostToNetwork8) ) << 32) + htonl(__HostToNetwork8 >> 32));
-	return __HostToNetwork8;
+	UInt64 buf;
+	memcpy( &buf, a_Value, sizeof( buf));
+	buf = (( ( static_cast<UInt64>(htonl(static_cast<UInt32>(buf)))) << 32) + htonl(buf >> 32));
+	return buf;
 }
 
 
 
 
 
-inline unsigned int HostToNetwork4(const void* a_Value )
+inline UInt32 HostToNetwork4(const void * a_Value)
 {
-	unsigned int __HostToNetwork4;
-	memcpy( &__HostToNetwork4, a_Value, sizeof( __HostToNetwork4 ) );
-	__HostToNetwork4 = ntohl( __HostToNetwork4 );
-	return __HostToNetwork4;
+	UInt32 buf;
+	memcpy( &buf, a_Value, sizeof( buf));
+	buf = ntohl( buf);
+	return buf;
 }
 
 
 
 
 
-inline double NetworkToHostDouble8(const void* a_Value )
+inline double NetworkToHostDouble8(const void * a_Value)
 {
-#define ntohll(x)   ((((unsigned long long)ntohl((u_long)x)) << 32) + ntohl(x >> 32))
-	unsigned long long buf = 0;//(*(unsigned long long*)a_Value);
-	memcpy( &buf, a_Value, 8 );
+	UInt64 buf = 0;
+	memcpy(&buf, a_Value, 8);
 	buf = ntohll(buf);
 	double x;
 	memcpy(&x, &buf, sizeof(double));
@@ -45,23 +47,37 @@ inline double NetworkToHostDouble8(const void* a_Value )
 
 
 
-inline long long NetworkToHostLong8(const void * a_Value )
+inline Int64 NetworkToHostLong8(const void * a_Value)
 {
-	unsigned long long buf = *(unsigned long long*)a_Value;
+	UInt64 buf;
+	memcpy(&buf, a_Value, 8);
 	buf = ntohll(buf);
-	return *reinterpret_cast<long long *>(&buf);
+	return *reinterpret_cast<Int64 *>(&buf);
 }
 
 
 
 
 
-inline float NetworkToHostFloat4(const void* a_Value )
+inline UInt64 NetworkToHostULong8(const void * a_Value)
 {
-	u_long buf = *(u_long*)a_Value;
-	buf = ntohl( buf );
-	float x = 0;
-	memcpy( &x, &buf, sizeof(float) );
+	UInt64 buf;
+	memcpy(&buf, a_Value, 8);
+	buf = ntohll(buf);
+	return buf;
+}
+
+
+
+
+
+inline float NetworkToHostFloat4(const void * a_Value)
+{
+	UInt32 buf;
+	float x;
+	memcpy(&buf, a_Value, 4);
+	buf = ntohl(buf);
+	memcpy(&x, &buf, sizeof(float));
 	return x;
 }
 

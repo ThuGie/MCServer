@@ -9,10 +9,9 @@
 
 #pragma once
 
-#include "OSSupport/SocketThreads.h"
-#include "OSSupport/ListenThread.h"
-
 #include "RCONServer.h"
+#include "OSSupport/IsThread.h"
+#include "OSSupport/Network.h"
 
 #ifdef _MSC_VER
 	#pragma warning(push)
@@ -23,7 +22,7 @@
 	#pragma warning(disable:4702)
 #endif
 
-#include "Crypto.h"
+#include "mbedTLS++/RsaPrivateKey.h"
 
 #ifdef _MSC_VER
 	#pragma warning(pop)
@@ -34,190 +33,245 @@
 
 
 // fwd:
-class cPlayer;
 class cClientHandle;
-class cIniFile;
-class cCommandOutputCallback ;
+typedef std::shared_ptr<cClientHandle> cClientHandlePtr;
+typedef std::list<cClientHandlePtr> cClientHandlePtrs;
+typedef std::list<cClientHandle *> cClientHandles;
+class cCommandOutputCallback;
+class cSettingsRepositoryInterface;
+class cUUID;
 
-typedef std::list<cClientHandle *> cClientHandleList;
+
+namespace Json
+{
+	class Value;
+}
 
 
 
 
 
-class cServer										// tolua_export
-	: public cListenThread::cCallback
-{													// tolua_export
-public:												// tolua_export
+// tolua_begin
+class cServer
+{
+public:
+	// tolua_end
 
 	virtual ~cServer() {}
-	bool InitServer(cIniFile & a_SettingsIni);
+	bool InitServer(cSettingsRepositoryInterface & a_Settings, bool a_ShouldAuth);
 
 	// tolua_begin
-	
+
 	const AString & GetDescription(void) const {return m_Description; }
 
+	const AString & GetShutdownMessage(void) const { return m_ShutdownMessage; }
+
 	// Player counts:
-	int  GetMaxPlayers(void) const {return m_MaxPlayers; }
-	int  GetNumPlayers(void);
-	void SetMaxPlayers(int a_MaxPlayers) { m_MaxPlayers = a_MaxPlayers; }
-	
+	size_t GetMaxPlayers(void) const { return m_MaxPlayers; }
+	size_t GetNumPlayers(void) const { return m_PlayerCount; }
+	void SetMaxPlayers(size_t a_MaxPlayers) { m_MaxPlayers = a_MaxPlayers; }
+
+	// tolua_end
+
+	/** Add a Forge mod to the server ping list. */
+	bool RegisterForgeMod(const AString & a_ModName, const AString & a_ModVersion, UInt32 a_ProtocolVersionNumber);
+
+	// tolua_begin
+
+	/** Remove a Forge mod to the server ping list. */
+	void UnregisterForgeMod(const AString & a_ModName, UInt32 a_ProtocolVersionNumber);
+
+	/** Check if the player is queued to be transferred to a World.
+	Returns true is Player is found in queue. */
+	bool IsPlayerInQueue(AString a_Username);
+
+	/** Can login more than once with same username.
+	Returns false if it is not allowed, true otherwise. */
+	bool DoesAllowMultiLogin(void) { return m_bAllowMultiLogin; }
+
 	// Hardcore mode or not:
-	bool IsHardcore(void) const {return m_bIsHardcore; }
+	bool IsHardcore(void) const { return m_bIsHardcore; }
 
 	// tolua_end
 
 	bool Start(void);
 
 	bool Command(cClientHandle & a_Client, AString & a_Cmd);
-	
+
 	/** Executes the console command, sends output through the specified callback */
 	void ExecuteConsoleCommand(const AString & a_Cmd, cCommandOutputCallback & a_Output);
-	
+
 	/** Lists all available console commands and their helpstrings */
 	void PrintHelp(const AStringVector & a_Split, cCommandOutputCallback & a_Output);
 
 	/** Binds the built-in console commands with the plugin manager */
 	static void BindBuiltInConsoleCommands(void);
-	
+
 	void Shutdown(void);
 
 	void KickUser(int a_ClientID, const AString & a_Reason);
-	void AuthenticateUser(int a_ClientID);  // Called by cAuthenticator to auth the specified user
+
+	/** Authenticates the specified user, called by cAuthenticator */
+	void AuthenticateUser(int a_ClientID, const AString & a_Name, const cUUID & a_UUID, const Json::Value & a_Properties);
 
 	const AString & GetServerID(void) const { return m_ServerID; }  // tolua_export
-	
-	/** Called by cClientHandle's destructor; stop m_SocketThreads from calling back into a_Client */
-	void ClientDestroying(const cClientHandle * a_Client);
-	
-	/** Notifies m_SocketThreads that client has something to be written */
-	void NotifyClientWrite(const cClientHandle * a_Client);
-	
-	void WriteToClient(const cClientHandle * a_Client, const AString & a_Data);  // Queues outgoing data for the client through m_SocketThreads
-	
-	void RemoveClient(const cClientHandle * a_Client);  // Removes the clienthandle from m_SocketThreads
-	
+
 	/** Don't tick a_Client anymore, it will be ticked from its cPlayer instead */
 	void ClientMovedToWorld(const cClientHandle * a_Client);
-	
+
 	/** Notifies the server that a player was created; the server uses this to adjust the number of players */
-	void PlayerCreated(const cPlayer * a_Player);
-	
+	void PlayerCreated();
+
 	/** Notifies the server that a player is being destroyed; the server uses this to adjust the number of players */
-	void PlayerDestroying(const cPlayer * a_Player);
+	void PlayerDestroyed();
 
 	/** Returns base64 encoded favicon data (obtained from favicon.png) */
 	const AString & GetFaviconData(void) const { return m_FaviconData; }
-	
-	cRSAPrivateKey & GetPrivateKey(void) { return m_PrivateKey; }
+
+	cRsaPrivateKey & GetPrivateKey(void) { return m_PrivateKey; }
 	const AString & GetPublicKeyDER(void) const { return m_PublicKeyDER; }
-	
-	bool ShouldAuthenticate(void) const { return m_ShouldAuthenticate; }
-	
+
+	/** Returns true if authentication has been turned on in server settings. */
+	bool ShouldAuthenticate(void) const { return m_ShouldAuthenticate; }  // tolua_export
+
+	/** Returns true if limit for number of block changes per tick by a player has been turned on in server settings. */
+	bool ShouldLimitPlayerBlockChanges(void) const { return m_ShouldLimitPlayerBlockChanges; }
+
+	/** Returns true if offline UUIDs should be used to load data for players whose normal UUIDs cannot be found.
+	Loaded from the settings.ini [PlayerData].LoadOfflinePlayerData setting. */
+	bool ShouldLoadOfflinePlayerData(void) const { return m_ShouldLoadOfflinePlayerData; }
+
+	/** Returns true if old-style playernames should be used to load data for players whose regular datafiles cannot be found.
+	This allows a seamless transition from name-based to UUID-based player storage.
+	Loaded from the settings.ini [PlayerData].LoadNamedPlayerData setting. */
+	bool ShouldLoadNamedPlayerData(void) const { return m_ShouldLoadNamedPlayerData; }
+
+	/** Returns true if BungeeCord logins (that specify the player's UUID) are allowed.
+	Read from settings, admins should set this to true only when they chain to BungeeCord,
+	it makes the server vulnerable to identity theft through direct connections. */
+	bool ShouldAllowBungeeCord(void) const { return m_ShouldAllowBungeeCord; }
+
+	/** Returns true if usernames should be completed across worlds. This is read
+	from the settings. */
+	bool ShouldAllowMultiWorldTabCompletion(void) const { return m_ShouldAllowMultiWorldTabCompletion; }
+
+	/** Get the Forge mods (map of ModName -> ModVersionString) registered for a given protocol. */
+	const AStringMap & GetRegisteredForgeMods(const UInt32 a_Protocol);
+
 private:
 
-	friend class cRoot; // so cRoot can create and destroy cServer
-	
-	/** When NotifyClientWrite() is called, it is queued for this thread to process (to avoid deadlocks between cSocketThreads, cClientHandle and cChunkMap) */
-	class cNotifyWriteThread :
-		public cIsThread
-	{
-		typedef cIsThread super;
-		
-		cEvent    m_Event;  // Set when m_Clients gets appended
-		cServer * m_Server;
+	friend class cRoot;  // so cRoot can create and destroy cServer
+	friend class cServerListenCallbacks;  // Accessing OnConnectionAccepted()
 
-		cCriticalSection  m_CS;
-		cClientHandleList m_Clients;
-		
-		virtual void Execute(void);
-		
-	public:	
-	
-		cNotifyWriteThread(void);
-		~cNotifyWriteThread();
-	
-		bool Start(cServer * a_Server);
-		
-		void NotifyClientWrite(const cClientHandle * a_Client);
-	} ;
-	
 	/** The server tick thread takes care of the players who aren't yet spawned in a world */
 	class cTickThread :
 		public cIsThread
 	{
 		typedef cIsThread super;
-		
+
 	public:
 		cTickThread(cServer & a_Server);
-		
+
 	protected:
 		cServer & m_Server;
-		
+
 		// cIsThread overrides:
 		virtual void Execute(void) override;
 	} ;
-	
-	
-	cNotifyWriteThread m_NotifyWriteThread;
-	
-	cListenThread m_ListenThreadIPv4;
-	cListenThread m_ListenThreadIPv6;
-	
-	cCriticalSection  m_CSClients;        ///< Locks client lists
-	cClientHandleList m_Clients;          ///< Clients that are connected to the server and not yet assigned to a cWorld
-	cClientHandleList m_ClientsToRemove;  ///< Clients that have just been moved into a world and are to be removed from m_Clients in the next Tick()
-	
-	cCriticalSection m_CSPlayerCount;      ///< Locks the m_PlayerCount
-	int              m_PlayerCount;        ///< Number of players currently playing in the server
-	cCriticalSection m_CSPlayerCountDiff;  ///< Locks the m_PlayerCountDiff
-	int              m_PlayerCountDiff;    ///< Adjustment to m_PlayerCount to be applied in the Tick thread
-	
-	cSocketThreads m_SocketThreads;
-	
+
+
+	/** The network sockets listening for client connections. */
+	cServerHandlePtrs m_ServerHandles;
+
+	/** Protects m_Clients and m_ClientsToRemove against multithreaded access. */
+	cCriticalSection m_CSClients;
+
+	/** Clients that are connected to the server and not yet assigned to a cWorld. */
+	cClientHandlePtrs m_Clients;
+
+	/** Clients that have just been moved into a world and are to be removed from m_Clients in the next Tick(). */
+	cClientHandles m_ClientsToRemove;
+
+	/** Number of players currently playing in the server. */
+	std::atomic_size_t m_PlayerCount;
+
 	int m_ClientViewDistance;  // The default view distance for clients; settable in Settings.ini
 
-	bool m_bIsConnected; // true - connected false - not connected
+	bool m_bIsConnected;  // true - connected false - not connected
 
-	bool m_bRestarting;
-	
+	std::atomic<bool> m_bRestarting;
+
 	/** The private key used for the assymetric encryption start in the protocols */
-	cRSAPrivateKey m_PrivateKey;
-	
+	cRsaPrivateKey m_PrivateKey;
+
 	/** Public key for m_PrivateKey, ASN1-DER-encoded */
 	AString m_PublicKeyDER;
-	
+
 	cRCONServer m_RCONServer;
-	
+
 	AString m_Description;
+	AString m_ShutdownMessage;
 	AString m_FaviconData;
-	int m_MaxPlayers;
+	size_t m_MaxPlayers;
 	bool m_bIsHardcore;
-	
+
+	/** Map of protocol version to Forge mods (map of ModName -> ModVersionString) */
+	std::map<UInt32, AStringMap> m_ForgeModsByVersion;
+
+	/** True - allow same username to login more than once False - only once */
+	bool m_bAllowMultiLogin;
+
 	cTickThread m_TickThread;
 	cEvent m_RestartEvent;
-	
+
 	/** The server ID used for client authentication */
 	AString m_ServerID;
-	
+
 	/** If true, players will be online-authenticated agains Mojang servers.
 	This setting is the same as the "online-mode" setting in Vanilla. */
 	bool m_ShouldAuthenticate;
-	
+
+	/** True if limit for number of block changes per tick by a player should be enabled. */
+	bool m_ShouldLimitPlayerBlockChanges;
+
+	/** True if offline UUIDs should be used to load data for players whose normal UUIDs cannot be found.
+	This allows transitions from an offline (no-auth) server to an online one.
+	Loaded from the settings.ini [PlayerData].LoadOfflinePlayerData setting. */
+	bool m_ShouldLoadOfflinePlayerData;
+
+	/** True if old-style playernames should be used to load data for players whose regular datafiles cannot be found.
+	This allows a seamless transition from name-based to UUID-based player storage.
+	Loaded from the settings.ini [PlayerData].LoadNamedPlayerData setting. */
+	bool m_ShouldLoadNamedPlayerData;
+
+	/** True if BungeeCord handshake packets (with player UUID) should be accepted. */
+	bool m_ShouldAllowBungeeCord;
+
+	/** True if usernames should be completed across worlds. */
+	bool m_ShouldAllowMultiWorldTabCompletion;
+
+	/** The list of ports on which the server should listen for connections.
+	Initialized in InitServer(), used in Start(). */
+	AStringVector m_Ports;
+
 
 	cServer(void);
 
+	/** Get the Forge mods registered for a given protocol, for modification */
+	AStringMap & RegisteredForgeMods(const UInt32 a_Protocol);
+
 	/** Loads, or generates, if missing, RSA keys for protocol encryption */
 	void PrepareKeys(void);
-	
+
+	/** Creates a new cClientHandle instance and adds it to the list of clients.
+	Returns the cClientHandle reinterpreted as cTCPLink callbacks. */
+	cTCPLink::cCallbacksPtr OnConnectionAccepted(const AString & a_RemoteIPAddress);
+
 	bool Tick(float a_Dt);
-	
+
 	/** Ticks the clients in m_Clients, manages the list in respect to removing clients */
 	void TickClients(float a_Dt);
-
-	// cListenThread::cCallback overrides:
-	virtual void OnConnectionAccepted(cSocket & a_Socket) override;
-}; // tolua_export
+};  // tolua_export
 
 
 

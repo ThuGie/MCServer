@@ -20,12 +20,7 @@ in a depth-first processing. Each of the descendants will branch randomly, if no
 #include "MineShafts.h"
 #include "../Cuboid.h"
 #include "../BlockEntities/ChestEntity.h"
-
-
-
-
-
-static const int NEIGHBORHOOD_SIZE = 3;
+#include "../BlockEntities/MobSpawnerEntity.h"
 
 
 
@@ -70,18 +65,19 @@ public:
 	{
 	}
 
-	/// Returns true if this mineshaft intersects the specified cuboid
+	virtual ~cMineShaft() {}
+
+	/** Returns true if this mineshaft intersects the specified cuboid */
 	bool DoesIntersect(const cCuboid & a_Other)
 	{
 		return m_BoundingBox.DoesIntersect(a_Other);
 	}
 
 	/** If recursion level is not too large, appends more branches to the parent system,
-	using exit points specific to this class.
-	*/
+	using exit points specific to this class. */
 	virtual void AppendBranches(int a_RecursionLevel, cNoise & a_Noise) = 0;
 
-	/// Imprints this shape into the specified chunk's data
+	/** Imprints this shape into the specified chunk's data */
 	virtual void ProcessChunk(cChunkDesc & a_ChunkDesc) = 0;
 } ;
 
@@ -116,7 +112,7 @@ class cMineShaftCorridor :
 public:
 	/** Creates a new Corridor attached to the specified pivot point and direction.
 	Checks all ParentSystem's objects and disallows intersecting. Initializes the new object to fit.
-	May return NULL if cannot fit.
+	May return nullptr if cannot fit.
 	*/
 	static cMineShaft * CreateAndFit(
 		cStructGenMineShafts::cMineShaftSystem & a_ParentSystem,
@@ -144,16 +140,16 @@ protected:
 	virtual void AppendBranches(int a_RecursionLevel, cNoise & a_Noise) override;
 	virtual void ProcessChunk(cChunkDesc & a_ChunkDesc) override;
 
-	/// Places a chest, if the corridor has one
+	/** Places a chest, if the corridor has one */
 	void PlaceChest(cChunkDesc & a_ChunkDesc);
 
-	/// If this corridor has tracks, places them randomly
+	/** If this corridor has tracks, places them randomly */
 	void PlaceTracks(cChunkDesc & a_ChunkDesc);
 
-	/// If this corridor has a spawner, places the spawner
+	/** If this corridor has a spawner, places the spawner */
 	void PlaceSpawner(cChunkDesc & a_ChunkDesc);
 
-	/// Randomly places torches around the central beam block
+	/** Randomly places torches around the central beam block */
 	void PlaceTorches(cChunkDesc & a_ChunkDesc);
 } ;
 
@@ -169,7 +165,7 @@ class cMineShaftCrossing :
 public:
 	/** Creates a new Crossing attached to the specified pivot point and direction.
 	Checks all ParentSystem's objects and disallows intersecting. Initializes the new object to fit.
-	May return NULL if cannot fit.
+	May return nullptr if cannot fit.
 	*/
 	static cMineShaft * CreateAndFit(
 		cStructGenMineShafts::cMineShaftSystem & a_ParentSystem,
@@ -203,7 +199,7 @@ public:
 
 	/** Creates a new Staircase attached to the specified pivot point and direction.
 	Checks all ParentSystem's objects and disallows intersecting. Initializes the new object to fit.
-	May return NULL if cannot fit.
+	May return nullptr if cannot fit.
 	*/
 	static cMineShaft * CreateAndFit(
 		cStructGenMineShafts::cMineShaftSystem & a_ParentSystem,
@@ -232,10 +228,12 @@ protected:
 
 
 
-class cStructGenMineShafts::cMineShaftSystem
+class cStructGenMineShafts::cMineShaftSystem :
+	public cGridStructGen::cStructure
 {
+	typedef cGridStructGen::cStructure super;
+
 public:
-	int         m_BlockX, m_BlockZ;    ///< The pivot point on which the system is generated
 	int         m_GridSize;            ///< Maximum offset of the dirtroom from grid center, * 2, in each direction
 	int         m_MaxRecursion;        ///< Maximum recursion level (initialized from cStructGenMineShafts::m_MaxRecursion)
 	int         m_ProbLevelCorridor;   ///< Probability level of a branch object being the corridor
@@ -247,16 +245,15 @@ public:
 	cMineShafts m_MineShafts;          ///< List of cMineShaft descendants that comprise this system
 	cCuboid     m_BoundingBox;         ///< Bounding box into which all of the components need to fit
 
-	/// Creates and generates the entire system
+
+	/** Creates and generates the entire system */
 	cMineShaftSystem(
-		int a_BlockX, int a_BlockZ, int a_GridSize, int a_MaxSystemSize, cNoise & a_Noise,
+		int a_GridX, int a_GridZ, int a_OriginX, int a_OriginZ,
+		int a_GridSize, int a_MaxSystemSize, cNoise & a_Noise,
 		int a_ProbLevelCorridor, int a_ProbLevelCrossing, int a_ProbLevelStaircase
 	);
 
 	~cMineShaftSystem();
-
-	/// Carves the system into the chunk data
-	void ProcessChunk(cChunkDesc & a_Chunk);
 
 	/** Creates new cMineShaft descendant connected at the specified point, heading the specified direction,
 	if it fits, appends it to the list and calls its AppendBranches()
@@ -267,23 +264,26 @@ public:
 		int a_RecursionLevel
 	);
 
-	/// Returns true if none of the objects in m_MineShafts intersect with the specified bounding box and the bounding box is valid
+	/** Returns true if none of the objects in m_MineShafts intersect with the specified bounding box and the bounding box is valid */
 	bool CanAppend(const cCuboid & a_BoundingBox);
+
+	// cGridStructGen::cStructure overrides:
+	virtual void DrawIntoChunk(cChunkDesc & a_Chunk);
 } ;
 
 
 
 
 
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 // cStructGenMineShafts::cMineShaftSystem:
 
 cStructGenMineShafts::cMineShaftSystem::cMineShaftSystem(
-	int a_BlockX, int a_BlockZ, int a_GridSize, int a_MaxSystemSize, cNoise & a_Noise,
+	int a_GridX, int a_GridZ, int a_OriginX, int a_OriginZ,
+	int a_GridSize, int a_MaxSystemSize, cNoise & a_Noise,
 	int a_ProbLevelCorridor, int a_ProbLevelCrossing, int a_ProbLevelStaircase
 ) :
-	m_BlockX(a_BlockX),
-	m_BlockZ(a_BlockZ),
+	super(a_GridX, a_GridZ, a_OriginX, a_OriginZ),
 	m_GridSize(a_GridSize),
 	m_MaxRecursion(8),  // TODO: settable
 	m_ProbLevelCorridor(a_ProbLevelCorridor),
@@ -328,7 +328,7 @@ cStructGenMineShafts::cMineShaftSystem::~cMineShaftSystem()
 
 
 
-void cStructGenMineShafts::cMineShaftSystem::ProcessChunk(cChunkDesc & a_Chunk)
+void cStructGenMineShafts::cMineShaftSystem::DrawIntoChunk(cChunkDesc & a_Chunk)
 {
 	for (cMineShafts::const_iterator itr = m_MineShafts.begin(), end = m_MineShafts.end(); itr != end; ++itr)
 	{
@@ -351,7 +351,7 @@ void cStructGenMineShafts::cMineShaftSystem::AppendBranch(
 		return;
 	}
 
-	cMineShaft * Next = NULL;
+	cMineShaft * Next = nullptr;
 	int rnd = (a_Noise.IntNoise3DInt(a_PivotX, a_PivotY + a_RecursionLevel * 16, a_PivotZ) / 13) % m_ProbLevelStaircase;
 	if (rnd < m_ProbLevelCorridor)
 	{
@@ -365,7 +365,7 @@ void cStructGenMineShafts::cMineShaftSystem::AppendBranch(
 	{
 		Next = cMineShaftStaircase::CreateAndFit(*this, a_PivotX, a_PivotY, a_PivotZ, a_Direction, a_Noise);
 	}
-	if (Next == NULL)
+	if (Next == nullptr)
 	{
 		return;
 	}
@@ -400,22 +400,22 @@ bool cStructGenMineShafts::cMineShaftSystem::CanAppend(const cCuboid & a_Boundin
 
 
 
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 // cMineShaftDirtRoom:
 
 cMineShaftDirtRoom::cMineShaftDirtRoom(cStructGenMineShafts::cMineShaftSystem & a_Parent, cNoise & a_Noise) :
 	super(a_Parent, mskDirtRoom)
 {
 	// Make the room of random size, min 10 x 4 x 10; max 18 x 12 x 18:
-	int rnd = a_Noise.IntNoise3DInt(a_Parent.m_BlockX, 0, a_Parent.m_BlockZ) / 7;
+	int rnd = a_Noise.IntNoise3DInt(a_Parent.m_OriginX, 0, a_Parent.m_OriginZ) / 7;
 	int OfsX = (rnd % a_Parent.m_GridSize) - a_Parent.m_GridSize / 2;
 	rnd >>= 12;
 	int OfsZ = (rnd % a_Parent.m_GridSize) - a_Parent.m_GridSize / 2;
-	rnd = a_Noise.IntNoise3DInt(a_Parent.m_BlockX, 1000, a_Parent.m_BlockZ) / 11;
-	m_BoundingBox.p1.x = a_Parent.m_BlockX + OfsX;
+	rnd = a_Noise.IntNoise3DInt(a_Parent.m_OriginX, 1000, a_Parent.m_OriginZ) / 11;
+	m_BoundingBox.p1.x = a_Parent.m_OriginX + OfsX;
 	m_BoundingBox.p2.x = m_BoundingBox.p1.x + 10 + (rnd % 8);
 	rnd >>= 4;
-	m_BoundingBox.p1.z = a_Parent.m_BlockZ + OfsZ;
+	m_BoundingBox.p1.z = a_Parent.m_OriginZ + OfsZ;
 	m_BoundingBox.p2.z = m_BoundingBox.p1.z + 10 + (rnd % 8);
 	rnd >>= 4;
 	m_BoundingBox.p1.y = 20;
@@ -492,7 +492,7 @@ void cMineShaftDirtRoom::ProcessChunk(cChunkDesc & a_ChunkDesc)
 
 
 
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 // cMineShaftCorridor:
 
 cMineShaftCorridor::cMineShaftCorridor(
@@ -541,7 +541,7 @@ cMineShaft * cMineShaftCorridor::CreateAndFit(
 {
 	cCuboid BoundingBox(a_PivotX, a_PivotY - 1, a_PivotZ);
 	BoundingBox.p2.y += 3;
-	int rnd = a_Noise.IntNoise3DInt(a_PivotX, a_PivotY + a_ParentSystem.m_MineShafts.size(), a_PivotZ) / 7;
+	int rnd = a_Noise.IntNoise3DInt(a_PivotX, a_PivotY + static_cast<int>(a_ParentSystem.m_MineShafts.size()), a_PivotZ) / 7;
 	int NumSegments = 2 + (rnd) % (MAX_SEGMENTS - 1);  // 2 .. MAX_SEGMENTS
 	switch (a_Direction)
 	{
@@ -552,7 +552,7 @@ cMineShaft * cMineShaftCorridor::CreateAndFit(
 	}
 	if (!a_ParentSystem.CanAppend(BoundingBox))
 	{
-		return NULL;
+		return nullptr;
 	}
 	return new cMineShaftCorridor(a_ParentSystem, BoundingBox, NumSegments, a_Direction, a_Noise);
 }
@@ -563,14 +563,14 @@ cMineShaft * cMineShaftCorridor::CreateAndFit(
 
 void cMineShaftCorridor::AppendBranches(int a_RecursionLevel, cNoise & a_Noise)
 {
-	int rnd = a_Noise.IntNoise3DInt(m_BoundingBox.p1.x, m_BoundingBox.p1.y + a_RecursionLevel, m_BoundingBox.p1.z) / 7;
+	int Outerrnd = a_Noise.IntNoise3DInt(m_BoundingBox.p1.x, m_BoundingBox.p1.y + a_RecursionLevel, m_BoundingBox.p1.z) / 7;
 	// Prefer the same height, but allow for up to one block height displacement:
-	int Height = m_BoundingBox.p1.y + ((rnd % 4) + ((rnd >> 3) % 3)) / 2;
+	int OuterHeight = m_BoundingBox.p1.y + ((Outerrnd % 4) + ((Outerrnd >> 3) % 3)) / 2;
 	switch (m_Direction)
 	{
 		case dirXM:
 		{
-			m_ParentSystem.AppendBranch(m_BoundingBox.p1.x - 1, Height, m_BoundingBox.p1.z + 1, dirXM, a_Noise, a_RecursionLevel);
+			m_ParentSystem.AppendBranch(m_BoundingBox.p1.x - 1, OuterHeight, m_BoundingBox.p1.z + 1, dirXM, a_Noise, a_RecursionLevel);
 			for (int i = m_NumSegments; i >= 0; i--)
 			{
 				int rnd = a_Noise.IntNoise3DInt(m_BoundingBox.p1.x + i + 10, m_BoundingBox.p1.y + a_RecursionLevel, m_BoundingBox.p1.z) / 11;
@@ -585,7 +585,7 @@ void cMineShaftCorridor::AppendBranches(int a_RecursionLevel, cNoise & a_Noise)
 
 		case dirXP:
 		{
-			m_ParentSystem.AppendBranch(m_BoundingBox.p2.x + 1, Height, m_BoundingBox.p1.z + 1, dirXP, a_Noise, a_RecursionLevel);
+			m_ParentSystem.AppendBranch(m_BoundingBox.p2.x + 1, OuterHeight, m_BoundingBox.p1.z + 1, dirXP, a_Noise, a_RecursionLevel);
 			for (int i = m_NumSegments; i >= 0; i--)
 			{
 				int rnd = a_Noise.IntNoise3DInt(m_BoundingBox.p1.x + i + 10, m_BoundingBox.p1.y + a_RecursionLevel, m_BoundingBox.p1.z) / 11;
@@ -600,7 +600,7 @@ void cMineShaftCorridor::AppendBranches(int a_RecursionLevel, cNoise & a_Noise)
 
 		case dirZM:
 		{
-			m_ParentSystem.AppendBranch(m_BoundingBox.p1.x + 1, Height, m_BoundingBox.p1.z - 1, dirZM, a_Noise, a_RecursionLevel);
+			m_ParentSystem.AppendBranch(m_BoundingBox.p1.x + 1, OuterHeight, m_BoundingBox.p1.z - 1, dirZM, a_Noise, a_RecursionLevel);
 			for (int i = m_NumSegments; i >= 0; i--)
 			{
 				int rnd = a_Noise.IntNoise3DInt(m_BoundingBox.p1.x + i + 10, m_BoundingBox.p1.y + a_RecursionLevel, m_BoundingBox.p1.z) / 11;
@@ -615,7 +615,7 @@ void cMineShaftCorridor::AppendBranches(int a_RecursionLevel, cNoise & a_Noise)
 
 		case dirZP:
 		{
-			m_ParentSystem.AppendBranch(m_BoundingBox.p1.x + 1, Height, m_BoundingBox.p2.z + 1, dirZP, a_Noise, a_RecursionLevel);
+			m_ParentSystem.AppendBranch(m_BoundingBox.p1.x + 1, OuterHeight, m_BoundingBox.p2.z + 1, dirZP, a_Noise, a_RecursionLevel);
 			for (int i = m_NumSegments; i >= 0; i--)
 			{
 				int rnd = a_Noise.IntNoise3DInt(m_BoundingBox.p1.x + i + 10, m_BoundingBox.p1.y + a_RecursionLevel, m_BoundingBox.p1.z) / 11;
@@ -732,7 +732,7 @@ void cMineShaftCorridor::ProcessChunk(cChunkDesc & a_ChunkDesc)
 
 	PlaceChest(a_ChunkDesc);
 	PlaceTracks(a_ChunkDesc);
-	PlaceSpawner(a_ChunkDesc); // (must be after Tracks!)
+	PlaceSpawner(a_ChunkDesc);  // (must be after Tracks!)
 	PlaceTorches(a_ChunkDesc);
 }
 
@@ -767,27 +767,30 @@ void cMineShaftCorridor::PlaceChest(cChunkDesc & a_ChunkDesc)
 	int BlockZ = a_ChunkDesc.GetChunkZ() * cChunkDef::Width;
 	int x, z;
 	NIBBLETYPE Meta = 0;
-	switch (m_Direction)
+	[&]
 	{
-		case dirXM:
-		case dirXP:
+		switch (m_Direction)
 		{
-			x = m_BoundingBox.p1.x + m_ChestPosition - BlockX;
-			z = m_BoundingBox.p1.z - BlockZ;
-			Meta = E_META_CHEST_FACING_ZP;
-			break;
-		}
+			case dirXM:
+			case dirXP:
+			{
+				x = m_BoundingBox.p1.x + m_ChestPosition - BlockX;
+				z = m_BoundingBox.p1.z - BlockZ;
+				Meta = E_META_CHEST_FACING_ZP;
+				return;
+			}
 
-		case dirZM:
-		case dirZP:
-		default:
-		{
-			x = m_BoundingBox.p1.x - BlockX;
-			z = m_BoundingBox.p1.z + m_ChestPosition - BlockZ;
-			Meta = E_META_CHEST_FACING_XP;
-			break;
-		}
-	}  // switch (Dir)
+			case dirZM:
+			case dirZP:
+			{
+				x = m_BoundingBox.p1.x - BlockX;
+				z = m_BoundingBox.p1.z + m_ChestPosition - BlockZ;
+				Meta = E_META_CHEST_FACING_XP;
+				return;
+			}
+		}  // switch (Dir)
+		UNREACHABLE("Unsupported corridor direction");
+	}();
 
 	if (
 		(x >= 0) && (x < cChunkDef::Width) &&
@@ -795,8 +798,8 @@ void cMineShaftCorridor::PlaceChest(cChunkDesc & a_ChunkDesc)
 	)
 	{
 		a_ChunkDesc.SetBlockTypeMeta(x, m_BoundingBox.p1.y + 1, z, E_BLOCK_CHEST, Meta);
-		cChestEntity * ChestEntity = (cChestEntity *)a_ChunkDesc.GetBlockEntity(x, m_BoundingBox.p1.y + 1, z);
-		ASSERT((ChestEntity != NULL) && (ChestEntity->GetBlockType() == E_BLOCK_CHEST));
+		cChestEntity * ChestEntity = static_cast<cChestEntity *>(a_ChunkDesc.GetBlockEntity(x, m_BoundingBox.p1.y + 1, z));
+		ASSERT((ChestEntity != nullptr) && (ChestEntity->GetBlockType() == E_BLOCK_CHEST));
 		cNoise Noise(a_ChunkDesc.GetChunkX() ^ a_ChunkDesc.GetChunkZ());
 		int NumSlots = 3 + ((Noise.IntNoise3DInt(x, m_BoundingBox.p1.y, z) / 11) % 4);
 		int Seed = Noise.IntNoise2DInt(x, z);
@@ -875,7 +878,9 @@ void cMineShaftCorridor::PlaceSpawner(cChunkDesc & a_ChunkDesc)
 	)
 	{
 		a_ChunkDesc.SetBlockTypeMeta(SpawnerRelX, m_BoundingBox.p1.y + 1, SpawnerRelZ, E_BLOCK_MOB_SPAWNER, 0);
-		// TODO: The spawner needs its accompanying cMobSpawnerEntity, when implemented
+		cMobSpawnerEntity * MobSpawner = static_cast<cMobSpawnerEntity *>(a_ChunkDesc.GetBlockEntity(SpawnerRelX, m_BoundingBox.p1.y + 1, SpawnerRelZ));
+		ASSERT((MobSpawner != nullptr) && (MobSpawner->GetBlockType() == E_BLOCK_MOB_SPAWNER));
+		MobSpawner->SetEntity(mtCaveSpider);
 	}
 }
 
@@ -964,7 +969,7 @@ void cMineShaftCorridor::PlaceTorches(cChunkDesc & a_ChunkDesc)
 
 
 
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 // cMineShaftCrossing:
 
 cMineShaftCrossing::cMineShaftCrossing(cStructGenMineShafts::cMineShaftSystem & a_ParentSystem, const cCuboid & a_BoundingBox) :
@@ -983,7 +988,7 @@ cMineShaft * cMineShaftCrossing::CreateAndFit(
 )
 {
 	cCuboid BoundingBox(a_PivotX, a_PivotY - 1, a_PivotZ);
-	int rnd = a_Noise.IntNoise3DInt(a_PivotX, a_PivotY + a_ParentSystem.m_MineShafts.size(), a_PivotZ) / 7;
+	int rnd = a_Noise.IntNoise3DInt(a_PivotX, a_PivotY + static_cast<int>(a_ParentSystem.m_MineShafts.size()), a_PivotZ) / 7;
 	BoundingBox.p2.y += 3;
 	if ((rnd % 4) < 2)
 	{
@@ -997,7 +1002,6 @@ cMineShaft * cMineShaftCrossing::CreateAndFit(
 			BoundingBox.p2.y -= 4;
 		}
 	}
-	rnd >>= 2;
 	switch (a_Direction)
 	{
 		case dirXP: BoundingBox.p2.x += 4; BoundingBox.p1.z -= 2; BoundingBox.p2.z += 2; break;
@@ -1007,7 +1011,7 @@ cMineShaft * cMineShaftCrossing::CreateAndFit(
 	}
 	if (!a_ParentSystem.CanAppend(BoundingBox))
 	{
-		return NULL;
+		return nullptr;
 	}
 	return new cMineShaftCrossing(a_ParentSystem, BoundingBox);
 }
@@ -1100,7 +1104,7 @@ void cMineShaftCrossing::ProcessChunk(cChunkDesc & a_ChunkDesc)
 
 
 
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 // cMineShaftStaircase:
 
 cMineShaftStaircase::cMineShaftStaircase(
@@ -1125,7 +1129,7 @@ cMineShaft * cMineShaftStaircase::CreateAndFit(
 	cNoise & a_Noise
 )
 {
-	int rnd = a_Noise.IntNoise3DInt(a_PivotX, a_PivotY + a_ParentSystem.m_MineShafts.size(), a_PivotZ) / 7;
+	int rnd = a_Noise.IntNoise3DInt(a_PivotX, a_PivotY + static_cast<int>(a_ParentSystem.m_MineShafts.size()), a_PivotZ) / 7;
 	cCuboid Box;
 	switch (a_Direction)
 	{
@@ -1158,7 +1162,7 @@ cMineShaft * cMineShaftStaircase::CreateAndFit(
 	}
 	if (!a_ParentSystem.CanAppend(Box))
 	{
-		return NULL;
+		return nullptr;
 	}
 	return new cMineShaftStaircase(a_ParentSystem, Box, a_Direction, Slope);
 }
@@ -1278,14 +1282,14 @@ void cMineShaftStaircase::ProcessChunk(cChunkDesc & a_ChunkDesc)
 
 
 
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 // cStructGenMineShafts:
 
 cStructGenMineShafts::cStructGenMineShafts(
-	int a_Seed, int a_GridSize, int a_MaxSystemSize,
+	int a_Seed, int a_GridSize, int a_MaxOffset, int a_MaxSystemSize,
 	int a_ChanceCorridor, int a_ChanceCrossing, int a_ChanceStaircase
 ) :
-	m_Noise(a_Seed),
+	super(a_Seed, a_GridSize, a_GridSize, a_MaxOffset, a_MaxOffset, a_MaxSystemSize, a_MaxSystemSize, 100),
 	m_GridSize(a_GridSize),
 	m_MaxSystemSize(a_MaxSystemSize),
 	m_ProbLevelCorridor(std::max(0, a_ChanceCorridor)),
@@ -1298,125 +1302,9 @@ cStructGenMineShafts::cStructGenMineShafts(
 
 
 
-cStructGenMineShafts::~cStructGenMineShafts()
+cGridStructGen::cStructurePtr cStructGenMineShafts::CreateStructure(int a_GridX, int a_GridZ, int a_OriginX, int a_OriginZ)
 {
-	ClearCache();
-}
-
-
-
-
-
-void cStructGenMineShafts::ClearCache(void)
-{
-	for (cMineShaftSystems::const_iterator itr = m_Cache.begin(), end = m_Cache.end(); itr != end; ++itr)
-	{
-		delete *itr;
-	}  // for itr - m_Cache[]
-	m_Cache.clear();
-}
-
-
-
-
-
-void cStructGenMineShafts::GetMineShaftSystemsForChunk(
-	int a_ChunkX, int a_ChunkZ,
-	cStructGenMineShafts::cMineShaftSystems & a_MineShafts
-)
-{
-	int BaseX = a_ChunkX * cChunkDef::Width / m_GridSize;
-	int BaseZ = a_ChunkZ * cChunkDef::Width / m_GridSize;
-	if (BaseX < 0)
-	{
-		--BaseX;
-	}
-	if (BaseZ < 0)
-	{
-		--BaseZ;
-	}
-	BaseX -= NEIGHBORHOOD_SIZE / 2;
-	BaseZ -= NEIGHBORHOOD_SIZE / 2;
-
-	// Walk the cache, move each cave system that we want into a_Caves:
-	int StartX = BaseX * m_GridSize;
-	int EndX = (BaseX + NEIGHBORHOOD_SIZE + 1) * m_GridSize;
-	int StartZ = BaseZ * m_GridSize;
-	int EndZ = (BaseZ + NEIGHBORHOOD_SIZE + 1) * m_GridSize;
-	for (cMineShaftSystems::iterator itr = m_Cache.begin(), end = m_Cache.end(); itr != end;)
-	{
-		if (
-			((*itr)->m_BlockX >= StartX) && ((*itr)->m_BlockX < EndX) &&
-			((*itr)->m_BlockZ >= StartZ) && ((*itr)->m_BlockZ < EndZ)
-		)
-		{
-			// want
-			a_MineShafts.push_back(*itr);
-			itr = m_Cache.erase(itr);
-		}
-		else
-		{
-			// don't want
-			++itr;
-		}
-	}  // for itr - m_Cache[]
-
-	for (int x = 0; x < NEIGHBORHOOD_SIZE; x++)
-	{
-		int RealX = (BaseX + x) * m_GridSize;
-		for (int z = 0; z < NEIGHBORHOOD_SIZE; z++)
-		{
-			int RealZ = (BaseZ + z) * m_GridSize;
-			bool Found = false;
-			for (cMineShaftSystems::const_iterator itr = a_MineShafts.begin(), end = a_MineShafts.end(); itr != end; ++itr)
-			{
-				if (((*itr)->m_BlockX == RealX) && ((*itr)->m_BlockZ == RealZ))
-				{
-					Found = true;
-					break;
-				}
-			}  // for itr - a_Mineshafts
-			if (!Found)
-			{
-				a_MineShafts.push_back(new cMineShaftSystem(RealX, RealZ, m_GridSize, m_MaxSystemSize, m_Noise, m_ProbLevelCorridor, m_ProbLevelCrossing, m_ProbLevelStaircase));
-			}
-		}  // for z
-	}  // for x
-
-	// Copy a_MineShafts into m_Cache to the beginning:
-	cMineShaftSystems MineShaftsCopy(a_MineShafts);
-	m_Cache.splice(m_Cache.begin(), MineShaftsCopy, MineShaftsCopy.begin(), MineShaftsCopy.end());
-
-	// Trim the cache if it's too long:
-	if (m_Cache.size() > 100)
-	{
-		cMineShaftSystems::iterator itr = m_Cache.begin();
-		std::advance(itr, 100);
-		for (cMineShaftSystems::iterator end = m_Cache.end(); itr != end; ++itr)
-		{
-			delete *itr;
-		}
-		itr = m_Cache.begin();
-		std::advance(itr, 100);
-		m_Cache.erase(itr, m_Cache.end());
-	}
-}
-
-
-
-
-
-
-void cStructGenMineShafts::GenStructures(cChunkDesc & a_ChunkDesc)
-{
-	int ChunkX = a_ChunkDesc.GetChunkX();
-	int ChunkZ = a_ChunkDesc.GetChunkZ();
-	cMineShaftSystems MineShafts;
-	GetMineShaftSystemsForChunk(ChunkX, ChunkZ, MineShafts);
-	for (cMineShaftSystems::const_iterator itr = MineShafts.begin(); itr != MineShafts.end(); ++itr)
-	{
-		(*itr)->ProcessChunk(a_ChunkDesc);
-	}  // for itr - MineShafts[]
+	return cStructurePtr(new cMineShaftSystem(a_GridX, a_GridZ, a_OriginX, a_OriginZ, m_GridSize, m_MaxSystemSize, m_Noise, m_ProbLevelCorridor, m_ProbLevelCrossing, m_ProbLevelStaircase));
 }
 
 

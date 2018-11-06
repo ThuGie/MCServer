@@ -5,14 +5,15 @@
 #include "Item.h"
 
 #include <fstream>
-#include <sstream>
+
+#define FURNACE_RECIPE_FILE FILE_IO_PREFIX "furnace.txt"
 
 
 
 
 
-typedef std::list< cFurnaceRecipe::Recipe > RecipeList;
-typedef std::list< cFurnaceRecipe::Fuel > FuelList;
+typedef std::list<cFurnaceRecipe::cRecipe> RecipeList;
+typedef std::list<cFurnaceRecipe::cFuel> FuelList;
 
 
 
@@ -29,7 +30,7 @@ struct cFurnaceRecipe::sFurnaceRecipeState
 
 
 cFurnaceRecipe::cFurnaceRecipe()
-	: m_pState( new sFurnaceRecipeState )
+	: m_pState(new sFurnaceRecipeState)
 {
 	ReloadRecipes();
 }
@@ -42,6 +43,7 @@ cFurnaceRecipe::~cFurnaceRecipe()
 {
 	ClearRecipes();
 	delete m_pState;
+	m_pState = nullptr;
 }
 
 
@@ -53,129 +55,200 @@ void cFurnaceRecipe::ReloadRecipes(void)
 	ClearRecipes();
 	LOGD("Loading furnace recipes...");
 
-	std::ifstream f;
-	char a_File[] = "furnace.txt";
-	f.open(a_File, std::ios::in);
-	std::string input;
-
+	std::ifstream f(FURNACE_RECIPE_FILE, std::ios::in);
 	if (!f.good())
 	{
-		f.close();
-		LOG("Could not open the furnace recipes file \"%s\"", a_File);
+		LOG("Could not open the furnace recipes file \"%s\". No furnace recipes are available.", FURNACE_RECIPE_FILE);
 		return;
 	}
 
-	// TODO: Replace this messy parse with a high-level-structured one (ReadLine / ProcessLine)
-	bool bSyntaxError = false;
-	while (f.good())
-	{
-		char c;
+	unsigned int LineNum = 0;
+	AString ParsingLine;
 
-		//////////////////////////////////////////////////////////////////////////
-		// comments
-		f >> c;
-		f.unget();
-		if( c == '#' )
+	while (std::getline(f, ParsingLine))
+	{
+		LineNum++;
+		if (ParsingLine.empty())
 		{
-			while( f.good() && c != '\n' )
-			{
-				f.get( c );
-			}
+			// There is a problem here on Android. Text files transferred from another OS may have a newline representation Android's implementation of getline doesn't expect
+			// Thus, part of a newline may be left in ParsingLine. ::empty() thus thinks the string isn't empty, and the below code outputs interesting errors since it was passed a nearly empty string
+			// Ref: https://stackoverflow.com/questions/6089231/getting-std-ifstream-to-handle-lf-cr-and-crlf
+			// TODO: There is a solution in the above reference, but it isn't very pretty. Fix it somehow.
 			continue;
 		}
 
-
-		//////////////////////////////////////////////////////////////////////////
-		// Line breaks
-		f.get( c );
-		while( f.good() && ( c == '\n' || c == '\r' ) ) { f.get( c ); }
-		if (f.eof())
+		// Remove comments from the line:
+		size_t FirstCommentSymbol = ParsingLine.find('#');
+		if ((FirstCommentSymbol != AString::npos) && (FirstCommentSymbol != 0))
 		{
-			break;
+			ParsingLine.erase(ParsingLine.begin() + static_cast<const long>(FirstCommentSymbol), ParsingLine.end());
 		}
-		f.unget();
 
-		//////////////////////////////////////////////////////////////////////////
-		// Check for fuel
-		f >> c;
-		if( c == '!' ) // It's fuel :)
+		switch (ParsingLine[0])
 		{
-			// Read item
-			int IItemID = 0, IItemCount = 0, IItemHealth = 0;
-			f >> IItemID;
-			f >> c; if( c != ':' ) { bSyntaxError = true; break; }
-			f >> IItemCount;
-
-			// Optional health
-			f >> c; 
-			if( c != ':' ) 
-				f.unget();
-			else
+			case '#':
 			{
-				f >> IItemHealth;
+				// Comment
+				break;
 			}
 
-			// Burn time
-			int BurnTime;
-			f >> c; if( c != '=' ) { bSyntaxError = true; break; }
-			f >> BurnTime;
+			case '!':
+			{
+				AddFuelFromLine(ParsingLine, LineNum);
+				break;
+			}
 
-			// Add to fuel list
-			Fuel F;
-			F.In = new cItem( (ENUM_ITEM_ID) IItemID, (char)IItemCount, (short)IItemHealth );
-			F.BurnTime = BurnTime;
-			m_pState->Fuel.push_back( F );
-			continue;
-		}
-		f.unget();
+			default:
+			{
+				AddRecipeFromLine(ParsingLine, LineNum);
+				break;
+			}
+		}  // switch (ParsingLine[0])
+	}  // while (getline(ParsingLine))
 
-		//////////////////////////////////////////////////////////////////////////
-		// Read items
-		int IItemID = 0, IItemCount = 0, IItemHealth = 0;
-		f >> IItemID;
-		f >> c; if( c != ':' ) { bSyntaxError = true; break; }
-		f >> IItemCount;
+	LOG("Loaded %zu furnace recipes and %zu fuels", m_pState->Recipes.size(), m_pState->Fuel.size());
+}
 
-		// Optional health
-		f >> c; 
-		if( c != ':' ) 
-			f.unget();
-		else
-		{
-			f >> IItemHealth;
-		}
 
-		int CookTime;
-		f >> c; if( c != '@' ) { bSyntaxError = true; break; }
-		f >> CookTime;
 
-		int OItemID = 0, OItemCount = 0, OItemHealth = 0;
-		f >> c; if( c != '=' ) { bSyntaxError = true; break; }
-		f >> OItemID;
-		f >> c; if( c != ':' ) { bSyntaxError = true; break; }
-		f >> OItemCount;
 
-		// Optional health
-		f >> c; 
-		if( c != ':' ) 
-			f.unget();
-		else
-		{
-			f >> OItemHealth;
-		}
 
-		// Add to recipe list
-		Recipe R;
-		R.In = new cItem( (ENUM_ITEM_ID)IItemID, (char)IItemCount, (short)IItemHealth );
-		R.Out = new cItem( (ENUM_ITEM_ID)OItemID, (char)OItemCount, (short)OItemHealth );
-		R.CookTime = CookTime;
-		m_pState->Recipes.push_back( R );
-	}
-	if (bSyntaxError)
+void cFurnaceRecipe::AddFuelFromLine(const AString & a_Line, unsigned int a_LineNum)
+{
+	AString Line(a_Line);
+	Line.erase(Line.begin());  // Remove the beginning "!"
+	Line.erase(std::remove_if(Line.begin(), Line.end(), isspace), Line.end());
+
+	std::unique_ptr<cItem> Item = cpp14::make_unique<cItem>();
+	int BurnTime;
+
+	const AStringVector & Sides = StringSplit(Line, "=");
+	if (Sides.size() != 2)
 	{
-		LOGERROR("ERROR: FurnaceRecipe, syntax error" );
+		LOGWARNING("furnace.txt: line %d: A single '=' was expected, got %zu", a_LineNum, Sides.size() - 1);
+		LOGINFO("Offending line: \"%s\"", a_Line.c_str());
+		return;
 	}
-	LOG("Loaded %u furnace recipes and %u fuels", m_pState->Recipes.size(), m_pState->Fuel.size());
+
+	if (!ParseItem(Sides[0], *Item))
+	{
+		LOGWARNING("furnace.txt: line %d: Cannot parse item \"%s\".", a_LineNum, Sides[0].c_str());
+		LOGINFO("Offending line: \"%s\"", a_Line.c_str());
+		return;
+	}
+
+	if (!StringToInteger<int>(Sides[1], BurnTime))
+	{
+		LOGWARNING("furnace.txt: line %d: Cannot parse burn time.", a_LineNum);
+		LOGINFO("Offending line: \"%s\"", a_Line.c_str());
+		return;
+	}
+
+	// Add to fuel list:
+	cFuel Fuel;
+	Fuel.In = Item.release();
+	Fuel.BurnTime = BurnTime;
+	m_pState->Fuel.push_back(Fuel);
+}
+
+
+
+
+
+void cFurnaceRecipe::AddRecipeFromLine(const AString & a_Line, unsigned int a_LineNum)
+{
+	AString Line(a_Line);
+	Line.erase(std::remove_if(Line.begin(), Line.end(), isspace), Line.end());
+
+	int CookTime = 200;
+	float Reward = 0;
+	std::unique_ptr<cItem> InputItem = cpp14::make_unique<cItem>();
+	std::unique_ptr<cItem> OutputItem = cpp14::make_unique<cItem>();
+
+	const AStringVector & Sides = StringSplit(Line, "=");
+	if (Sides.size() != 2)
+	{
+		LOGWARNING("furnace.txt: line %d: A single '=' was expected, got %zu", a_LineNum, Sides.size() - 1);
+		LOGINFO("Offending line: \"%s\"", a_Line.c_str());
+		return;
+	}
+
+	const AStringVector & InputSplit = StringSplit(Sides[0], "@");
+	if (!ParseItem(InputSplit[0], *InputItem))
+	{
+		LOGWARNING("furnace.txt: line %d: Cannot parse input item \"%s\".", a_LineNum, InputSplit[0].c_str());
+		LOGINFO("Offending line: \"%s\"", a_Line.c_str());
+		return;
+	}
+
+	if (InputSplit.size() > 1)
+	{
+		if (!StringToInteger<int>(InputSplit[1], CookTime))
+		{
+			LOGWARNING("furnace.txt: line %d: Cannot parse cook time \"%s\".", a_LineNum, InputSplit[1].c_str());
+			LOGINFO("Offending line: \"%s\"", a_Line.c_str());
+			return;
+		}
+	}
+	const AStringVector & OutputSplit = StringSplit(Sides[1], "$");
+	if (!ParseItem(OutputSplit[0], *OutputItem))
+	{
+		LOGWARNING("furnace.txt: line %d: Cannot parse output item \"%s\".", a_LineNum, OutputSplit[0].c_str());
+		LOGINFO("Offending line: \"%s\"", a_Line.c_str());
+		return;
+	}
+	if (OutputSplit.size() > 1)
+	{
+		if (!StringToFloat(OutputSplit[1], Reward))
+		{
+			LOGWARNING("furnace.txt: line %d: Cannot parse reward \"%s\".", a_LineNum, OutputSplit[1].c_str());
+			LOGINFO("Offending line: \"%s\"", a_Line.c_str());
+			return;
+		}
+	}
+	cRecipe Recipe;
+	Recipe.In = InputItem.release();
+	Recipe.Out = OutputItem.release();
+	Recipe.CookTime = CookTime;
+	Recipe.Reward = Reward;
+	m_pState->Recipes.push_back(Recipe);
+}
+
+
+
+
+
+bool cFurnaceRecipe::ParseItem(const AString & a_String, cItem & a_Item)
+{
+	AString ItemString = a_String;
+
+	const AStringVector & SplitAmount = StringSplit(ItemString, ",");
+	ItemString = SplitAmount[0];
+
+	const AStringVector & SplitMeta = StringSplit(ItemString, ":");
+	ItemString = SplitMeta[0];
+
+	if (!StringToItem(ItemString, a_Item))
+	{
+		return false;
+	}
+
+	if (SplitAmount.size() > 1)
+	{
+		if (!StringToInteger<char>(SplitAmount[1].c_str(), a_Item.m_ItemCount))
+		{
+			return false;
+		}
+	}
+
+	if (SplitMeta.size() > 1)
+	{
+		if (!StringToInteger<short>(SplitMeta[1].c_str(), a_Item.m_ItemDamage))
+		{
+			return false;
+		}
+	}
+	return true;
 }
 
 
@@ -186,16 +259,19 @@ void cFurnaceRecipe::ClearRecipes(void)
 {
 	for (RecipeList::iterator itr = m_pState->Recipes.begin(); itr != m_pState->Recipes.end(); ++itr)
 	{
-		Recipe R = *itr;
-		delete R.In;
-		delete R.Out;
+		cRecipe Recipe = *itr;
+		delete Recipe.In;
+		Recipe.In = nullptr;
+		delete Recipe.Out;
+		Recipe.Out = nullptr;
 	}
 	m_pState->Recipes.clear();
 
 	for (FuelList::iterator itr = m_pState->Fuel.begin(); itr != m_pState->Fuel.end(); ++itr)
 	{
-		Fuel F = *itr;
-		delete F.In;
+		cFuel Fuel = *itr;
+		delete Fuel.In;
+		Fuel.In = nullptr;
 	}
 	m_pState->Fuel.clear();
 }
@@ -204,25 +280,41 @@ void cFurnaceRecipe::ClearRecipes(void)
 
 
 
-const cFurnaceRecipe::Recipe * cFurnaceRecipe::GetRecipeFrom(const cItem & a_Ingredient) const
+const cFurnaceRecipe::cRecipe * cFurnaceRecipe::GetRecipeFrom(const cItem & a_Ingredient) const
 {
-	const Recipe * BestRecipe = 0;
+	const cRecipe * BestRecipe = nullptr;
 	for (RecipeList::const_iterator itr = m_pState->Recipes.begin(); itr != m_pState->Recipes.end(); ++itr)
 	{
-		const Recipe & R = *itr;
-		if ((R.In->m_ItemType == a_Ingredient.m_ItemType) && (R.In->m_ItemCount <= a_Ingredient.m_ItemCount))
+		const cRecipe & Recipe = *itr;
+		if ((Recipe.In->m_ItemType == a_Ingredient.m_ItemType) && (Recipe.In->m_ItemCount <= a_Ingredient.m_ItemCount))
 		{
-			if (BestRecipe && (BestRecipe->In->m_ItemCount > R.In->m_ItemCount))
+			if (BestRecipe && (BestRecipe->In->m_ItemCount > Recipe.In->m_ItemCount))
 			{
 				continue;
 			}
 			else
 			{
-				BestRecipe = &R;
+				BestRecipe = &Recipe;
 			}
 		}
 	}
 	return BestRecipe;
+}
+
+
+
+
+
+bool cFurnaceRecipe::IsFuel(const cItem & a_Item) const
+{
+	for (auto & Fuel : m_pState->Fuel)
+	{
+		if ((Fuel.In->m_ItemType == a_Item.m_ItemType) && (Fuel.In->m_ItemCount <= a_Item.m_ItemCount))
+		{
+			return true;
+		}
+	}
+	return false;
 }
 
 
@@ -234,16 +326,16 @@ int cFurnaceRecipe::GetBurnTime(const cItem & a_Fuel) const
 	int BestFuel = 0;
 	for (FuelList::const_iterator itr = m_pState->Fuel.begin(); itr != m_pState->Fuel.end(); ++itr)
 	{
-		const Fuel & F = *itr;
-		if ((F.In->m_ItemType == a_Fuel.m_ItemType) && (F.In->m_ItemCount <= a_Fuel.m_ItemCount))
+		const cFuel & Fuel = *itr;
+		if ((Fuel.In->m_ItemType == a_Fuel.m_ItemType) && (Fuel.In->m_ItemCount <= a_Fuel.m_ItemCount))
 		{
-			if (BestFuel > 0 && (BestFuel > F.BurnTime))
+			if (BestFuel > 0 && (BestFuel > Fuel.BurnTime))
 			{
 				continue;
 			}
 			else
 			{
-				BestFuel = F.BurnTime;
+				BestFuel = Fuel.BurnTime;
 			}
 		}
 	}

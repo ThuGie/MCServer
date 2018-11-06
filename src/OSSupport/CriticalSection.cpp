@@ -1,48 +1,17 @@
 
 #include "Globals.h"  // NOTE: MSVC stupidness requires this to be the same across all modules
-#include "IsThread.h"
+#include "CriticalSection.h"
 
 
 
 
 
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 // cCriticalSection:
 
-cCriticalSection::cCriticalSection()
+cCriticalSection::cCriticalSection():
+	m_RecursionCount(0)
 {
-	#ifdef _WIN32
-		InitializeCriticalSection(&m_CriticalSection);
-	#else
-		pthread_mutexattr_init(&m_Attributes);
-		pthread_mutexattr_settype(&m_Attributes, PTHREAD_MUTEX_RECURSIVE);
-
-		if (pthread_mutex_init(&m_CriticalSection, &m_Attributes) != 0)
-		{
-			LOGERROR("Could not initialize Critical Section!");
-		}
-	#endif
-	
-	#ifdef _DEBUG
-		m_IsLocked = 0;
-	#endif  // _DEBUG
-}
-
-
-
-
-
-cCriticalSection::~cCriticalSection()
-{
-	#ifdef _WIN32
-		DeleteCriticalSection(&m_CriticalSection);
-	#else
-		if (pthread_mutex_destroy(&m_CriticalSection) != 0)
-		{
-			LOGWARNING("Could not destroy Critical Section!");
-		}
-		pthread_mutexattr_destroy(&m_Attributes);
-	#endif
 }
 
 
@@ -51,16 +20,10 @@ cCriticalSection::~cCriticalSection()
 
 void cCriticalSection::Lock()
 {
-	#ifdef _WIN32
-		EnterCriticalSection(&m_CriticalSection);
-	#else
-		pthread_mutex_lock(&m_CriticalSection);
-	#endif
-	
-	#ifdef _DEBUG
-		m_IsLocked += 1;
-		m_OwningThreadID = cIsThread::GetCurrentID();
-	#endif  // _DEBUG
+	m_Mutex.lock();
+
+	m_RecursionCount += 1;
+	m_OwningThreadID = std::this_thread::get_id();
 }
 
 
@@ -69,26 +32,19 @@ void cCriticalSection::Lock()
 
 void cCriticalSection::Unlock()
 {
-	#ifdef _DEBUG
-		ASSERT(m_IsLocked > 0);
-		m_IsLocked -= 1;
-	#endif  // _DEBUG
-	
-	#ifdef _WIN32
-		LeaveCriticalSection(&m_CriticalSection);
-	#else
-		pthread_mutex_unlock(&m_CriticalSection);
-	#endif
+	ASSERT(IsLockedByCurrentThread());
+	m_RecursionCount -= 1;
+
+	m_Mutex.unlock();
 }
 
 
 
 
 
-#ifdef _DEBUG
 bool cCriticalSection::IsLocked(void)
 {
-	return (m_IsLocked > 0);
+	return (m_RecursionCount > 0);
 }
 
 
@@ -97,18 +53,17 @@ bool cCriticalSection::IsLocked(void)
 
 bool cCriticalSection::IsLockedByCurrentThread(void)
 {
-	return ((m_IsLocked > 0) && (m_OwningThreadID == cIsThread::GetCurrentID()));
+	return ((m_RecursionCount > 0) && (m_OwningThreadID == std::this_thread::get_id()));
 }
-#endif  // _DEBUG
 
 
 
 
 
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 // cCSLock
 
-cCSLock::cCSLock(cCriticalSection * a_CS) 
+cCSLock::cCSLock(cCriticalSection * a_CS)
 	: m_CS(a_CS)
 	, m_IsLocked(false)
 {
@@ -119,7 +74,7 @@ cCSLock::cCSLock(cCriticalSection * a_CS)
 
 
 
-cCSLock::cCSLock(cCriticalSection & a_CS) 
+cCSLock::cCSLock(cCriticalSection & a_CS)
 	: m_CS(&a_CS)
 	, m_IsLocked(false)
 {
@@ -165,7 +120,7 @@ void cCSLock::Unlock(void)
 
 
 
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 // cCSUnlock:
 
 cCSUnlock::cCSUnlock(cCSLock & a_Lock) :

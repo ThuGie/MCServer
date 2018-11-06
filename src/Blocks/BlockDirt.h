@@ -2,14 +2,15 @@
 #pragma once
 
 #include "BlockHandler.h"
-#include "../MersenneTwister.h"
-#include "../World.h"
+#include "../FastRandom.h"
+#include "../Root.h"
+#include "../Bindings/PluginManager.h"
 
 
 
 
 
-/// Handler used for both dirt and grass
+/** Handler used for all types of dirt and grass */
 class cBlockDirtHandler :
 	public cBlockHandler
 {
@@ -19,42 +20,65 @@ public:
 	{
 	}
 
-	
 	virtual void ConvertToPickups(cItems & a_Pickups, NIBBLETYPE a_BlockMeta) override
 	{
-		a_Pickups.push_back(cItem(E_BLOCK_DIRT, 1, 0));
+		if (a_BlockMeta == E_META_DIRT_COARSE)
+		{
+			// Drop the coarse block (dirt, meta 1)
+			a_Pickups.Add(E_BLOCK_DIRT, 1, E_META_DIRT_COARSE);
+		}
+		else
+		{
+			a_Pickups.Add(E_BLOCK_DIRT, 1, E_META_DIRT_NORMAL);
+		}
 	}
-	
-	
-	void OnUpdate(cChunk & a_Chunk, int a_RelX, int a_RelY, int a_RelZ) override
+
+	virtual void OnUpdate(cChunkInterface & cChunkInterface, cWorldInterface & a_WorldInterface, cBlockPluginInterface & a_PluginInterface, cChunk & a_Chunk, int a_RelX, int a_RelY, int a_RelZ) override
 	{
 		if (m_BlockType != E_BLOCK_GRASS)
 		{
 			return;
 		}
-		
-		// Grass becomes dirt if there is something on top of it:
-		if (a_RelY < cChunkDef::Height - 1)
+
+		// Make sure that there is enough light at the source block to spread
+		if (!a_Chunk.GetWorld()->IsChunkLighted(a_Chunk.GetPosX(), a_Chunk.GetPosZ()))
 		{
-			BLOCKTYPE Above = a_Chunk.GetBlock(a_RelX, a_RelY + 1, a_RelZ);
-			if ((!g_BlockTransparent[Above] && !g_BlockOneHitDig[Above]) || IsBlockWater(Above))
+			a_Chunk.GetWorld()->QueueLightChunk(a_Chunk.GetPosX(), a_Chunk.GetPosZ());
+			return;
+		}
+		else if ((a_RelY < cChunkDef::Height - 1))
+		{
+			BLOCKTYPE above = a_Chunk.GetBlock(a_RelX, a_RelY + 1, a_RelZ);
+
+			// Grass turns back to dirt when the block above it is not transparent or water.
+			// It does not turn to dirt when a snow layer is above.
+			if ((above != E_BLOCK_SNOW) &&
+				(!cBlockInfo::IsTransparent(above) || IsBlockWater(above)))
 			{
 				a_Chunk.FastSetBlock(a_RelX, a_RelY, a_RelZ, E_BLOCK_DIRT, E_META_DIRT_NORMAL);
 				return;
 			}
+
+			NIBBLETYPE light = std::max(a_Chunk.GetBlockLight(a_RelX, a_RelY + 1, a_RelZ), a_Chunk.GetTimeAlteredLight(a_Chunk.GetSkyLight(a_RelX, a_RelY + 1, a_RelZ)));
+			// Source block is not bright enough to spread
+			if (light < 9)
+			{
+				return;
+			}
+
 		}
-		
+
 		// Grass spreads to adjacent dirt blocks:
-		MTRand rand;  // TODO: Replace with cFastRandom
+		auto & rand = GetRandomProvider();
 		for (int i = 0; i < 2; i++)  // Pick two blocks to grow to
 		{
-			int OfsX = rand.randInt(2) - 1;  // [-1 .. 1]
-			int OfsY = rand.randInt(4) - 3;  // [-3 .. 1]
-			int OfsZ = rand.randInt(2) - 1;  // [-1 .. 1]
-	
+			int OfsX = rand.RandInt(-1, 1);
+			int OfsY = rand.RandInt(-3, 1);
+			int OfsZ = rand.RandInt(-1, 1);
+
 			BLOCKTYPE  DestBlock;
 			NIBBLETYPE DestMeta;
-			if ((a_RelY + OfsY < 0) || (a_RelY + OfsY >= cChunkDef::Height - 1))
+			if (!cChunkDef::IsValidHeight(a_RelY + OfsY))
 			{
 				// Y Coord out of range
 				continue;
@@ -63,7 +87,7 @@ public:
 			int BlockY = a_RelY + OfsY;
 			int BlockZ = a_RelZ + OfsZ;
 			cChunk * Chunk = a_Chunk.GetRelNeighborChunkAdjustCoords(BlockX, BlockZ);
-			if (Chunk == NULL)
+			if (Chunk == nullptr)
 			{
 				// Unloaded chunk
 				continue;
@@ -74,21 +98,35 @@ public:
 				// Not a regular dirt block
 				continue;
 			}
-
-			BLOCKTYPE AboveDest;
-			NIBBLETYPE AboveMeta;
-			Chunk->GetBlockTypeMeta(BlockX, BlockY + 1, BlockZ, AboveDest, AboveMeta);
-			if ((g_BlockOneHitDig[AboveDest] || g_BlockTransparent[AboveDest]) && !IsBlockWater(AboveDest))
+			BLOCKTYPE above = Chunk->GetBlock(BlockX, BlockY + 1, BlockZ);
+			NIBBLETYPE light = std::max(Chunk->GetBlockLight(BlockX, BlockY + 1, BlockZ), Chunk->GetTimeAlteredLight(Chunk->GetSkyLight(BlockX, BlockY + 1, BlockZ)));
+			if ((light > 4)  &&
+				cBlockInfo::IsTransparent(above) &&
+				(!IsBlockLava(above)) &&
+				(!IsBlockWaterOrIce(above))
+			)
 			{
-				Chunk->FastSetBlock(BlockX, BlockY, BlockZ, E_BLOCK_GRASS, 0);
+				if (!cRoot::Get()->GetPluginManager()->CallHookBlockSpread(*Chunk->GetWorld(), Chunk->GetPosX() * cChunkDef::Width + BlockX, BlockY, Chunk->GetPosZ() * cChunkDef::Width + BlockZ, ssGrassSpread))
+				{
+					Chunk->FastSetBlock(BlockX, BlockY, BlockZ, E_BLOCK_GRASS, 0);
+				}
 			}
 		}  // for i - repeat twice
 	}
 
-
-	virtual const char * GetStepSound(void) override
+	virtual ColourID GetMapBaseColourID(NIBBLETYPE a_Meta) override
 	{
-		return "step.gravel";
+		UNUSED(a_Meta);
+		switch (m_BlockType)
+		{
+			case E_BLOCK_DIRT: return 10;
+			case E_BLOCK_GRASS: return 1;
+			default:
+			{
+				ASSERT(!"Unhandled blocktype in dirt handler!");
+				return 0;
+			}
+		}
 	}
 } ;
 

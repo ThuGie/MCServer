@@ -5,8 +5,6 @@
 
 #include "Globals.h"
 #include "ProbabDistrib.h"
-#include "MersenneTwister.h"
-
 
 
 
@@ -17,7 +15,6 @@ cProbabDistrib::cProbabDistrib(int a_MaxValue) :
 	m_Sum(-1)
 {
 }
-
 
 
 
@@ -43,7 +40,7 @@ void cProbabDistrib::SetPoints(const cProbabDistrib::cPoints & a_Points)
 		{
 			continue;
 		}
-		
+
 		// Add the current trapezoid to the sum:
 		ProbSum += (LastProb + itr->m_Probability) * (itr->m_Value - LastValue) / 2;
 		LastProb = itr->m_Probability;
@@ -89,7 +86,7 @@ bool cProbabDistrib::SetDefString(const AString & a_DefString)
 		}
 		Pts.push_back(cPoint(Value, Prob));
 	}  // for itr - Points[]
-	
+
 	SetPoints(Pts);
 	return true;
 }
@@ -100,8 +97,7 @@ bool cProbabDistrib::SetDefString(const AString & a_DefString)
 
 int cProbabDistrib::Random(MTRand & a_Rand) const
 {
-	int v = a_Rand.randInt(m_Sum);
-	return MapValue(v);
+	return MapValue(a_Rand.RandInt(m_Sum));
 }
 
 
@@ -112,13 +108,13 @@ int cProbabDistrib::MapValue(int a_OrigValue) const
 {
 	ASSERT(a_OrigValue >= 0);
 	ASSERT(a_OrigValue < m_Sum);
-	
+
 	// Binary search through m_Cumulative for placement:
 	size_t Lo = 0;
 	size_t Hi = m_Cumulative.size() - 1;
 	while (Hi - Lo > 1)
 	{
-		int Mid = (Lo + Hi) / 2;
+		size_t Mid = (Lo + Hi) / 2;
 		int MidProbab = m_Cumulative[Mid].m_Probability;
 		if (MidProbab < a_OrigValue)
 		{
@@ -130,9 +126,10 @@ int cProbabDistrib::MapValue(int a_OrigValue) const
 		}
 	}
 	ASSERT(Hi - Lo == 1);
-	
+
 	// Linearly interpolate between Lo and Hi:
 	int ProbDif  = m_Cumulative[Hi].m_Probability - m_Cumulative[Lo].m_Probability;
+	ProbDif = (ProbDif != 0) ? ProbDif : 1;
 	int ValueDif = m_Cumulative[Hi].m_Value - m_Cumulative[Lo].m_Value;
 	return m_Cumulative[Lo].m_Value + (a_OrigValue - m_Cumulative[Lo].m_Probability) * ValueDif / ProbDif;
 }

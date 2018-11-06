@@ -7,25 +7,44 @@
 #include "DeadlockDetect.h"
 #include "Root.h"
 #include "World.h"
-# include <cstdlib>
+#include <cstdlib>
 
 
 
 
 
-/// Number of milliseconds per cycle
+/** Number of milliseconds per cycle */
 const int CYCLE_MILLISECONDS = 100;
-
-/// When the number of cycles for the same world age hits this value, it is considered a deadlock
-const int NUM_CYCLES_LIMIT = 200;  // 200 = twenty seconds
 
 
 
 
 
 cDeadlockDetect::cDeadlockDetect(void) :
-	super("DeadlockDetect")
+	super("DeadlockDetect"),
+	m_IntervalSec(1000)
 {
+}
+
+
+
+
+
+cDeadlockDetect::~cDeadlockDetect()
+{
+	// Check that all tracked CSs have been removed, report any remaining:
+	cCSLock lock(m_CS);
+	if (!m_TrackedCriticalSections.empty())
+	{
+		LOGWARNING("DeadlockDetect: Some CS objects (%u) haven't been removed from tracking", static_cast<unsigned>(m_TrackedCriticalSections.size()));
+		for (const auto & tcs: m_TrackedCriticalSections)
+		{
+			LOGWARNING("  CS %p / %s",
+				static_cast<void *>(tcs.first),
+				tcs.second.c_str()
+			);
+		}
+	}
 }
 
 
@@ -35,28 +54,42 @@ cDeadlockDetect::cDeadlockDetect(void) :
 bool cDeadlockDetect::Start(int a_IntervalSec)
 {
 	m_IntervalSec = a_IntervalSec;
-	
+
 	// Read the initial world data:
-	class cFillIn :
-		public cWorldListCallback
-	{
-	public:
-		cFillIn(cDeadlockDetect * a_Detect) :
-			m_Detect(a_Detect)
+	cRoot::Get()->ForEachWorld([=](cWorld & a_World)
 		{
-		}
-		
-		virtual bool Item(cWorld * a_World) override
-		{
-			m_Detect->SetWorldAge(a_World->GetName(), a_World->GetWorldAge());
+			SetWorldAge(a_World.GetName(), a_World.GetWorldAge());
 			return false;
 		}
-		
-	protected:
-		cDeadlockDetect * m_Detect;
-	} FillIn(this);
-	cRoot::Get()->ForEachWorld(FillIn);
+	);
 	return super::Start();
+}
+
+
+
+
+
+void cDeadlockDetect::TrackCriticalSection(cCriticalSection & a_CS, const AString & a_Name)
+{
+	cCSLock lock(m_CS);
+	m_TrackedCriticalSections.emplace_back(std::make_pair(&a_CS, a_Name));
+}
+
+
+
+
+
+void cDeadlockDetect::UntrackCriticalSection(cCriticalSection & a_CS)
+{
+	cCSLock lock(m_CS);
+	for (auto itr = m_TrackedCriticalSections.begin(), end = m_TrackedCriticalSections.end(); itr != end; ++itr)
+	{
+		if (itr->first == &a_CS)
+		{
+			m_TrackedCriticalSections.erase(itr);
+			return;
+		}
+	}
 }
 
 
@@ -69,27 +102,14 @@ void cDeadlockDetect::Execute(void)
 	while (!m_ShouldTerminate)
 	{
 		// Check the world ages:
-		class cChecker :
-			public cWorldListCallback
-		{
-		public:
-			cChecker(cDeadlockDetect * a_Detect) :
-				m_Detect(a_Detect)
+		cRoot::Get()->ForEachWorld([=](cWorld & a_World)
 			{
-			}
-			
-		protected:
-			cDeadlockDetect * m_Detect;
-			
-			virtual bool Item(cWorld * a_World) override
-			{
-				m_Detect->CheckWorldAge(a_World->GetName(), a_World->GetWorldAge());
+				CheckWorldAge(a_World.GetName(), a_World.GetWorldAge());
 				return false;
 			}
-		} Checker(this);
-		cRoot::Get()->ForEachWorld(Checker);
-		
-		cSleep::MilliSleep(CYCLE_MILLISECONDS);
+		);
+
+		std::this_thread::sleep_for(std::chrono::milliseconds(CYCLE_MILLISECONDS));
 	}  // while (should run)
 }
 
@@ -112,22 +132,24 @@ void cDeadlockDetect::CheckWorldAge(const AString & a_WorldName, Int64 a_Age)
 	WorldAges::iterator itr = m_WorldAges.find(a_WorldName);
 	if (itr == m_WorldAges.end())
 	{
-		ASSERT(!"Unknown world in cDeadlockDetect");
+		SetWorldAge(a_WorldName, a_Age);
 		return;
 	}
-	if (itr->second.m_Age == a_Age)
+
+	cDeadlockDetect::sWorldAge & WorldAge = itr->second;
+
+	if (WorldAge.m_Age == a_Age)
 	{
-		itr->second.m_NumCyclesSame += 1;
-		if (itr->second.m_NumCyclesSame > (1000 * m_IntervalSec) / CYCLE_MILLISECONDS)
+		WorldAge.m_NumCyclesSame += 1;
+		if (WorldAge.m_NumCyclesSame > (m_IntervalSec * 1000) / CYCLE_MILLISECONDS)
 		{
-			DeadlockDetected();
-			return;
+			DeadlockDetected(a_WorldName, a_Age);
 		}
 	}
 	else
 	{
-		itr->second.m_Age = a_Age;
-		itr->second.m_NumCyclesSame = 0;
+		WorldAge.m_Age = a_Age;
+		WorldAge.m_NumCyclesSame = 0;
 	}
 }
 
@@ -135,10 +157,30 @@ void cDeadlockDetect::CheckWorldAge(const AString & a_WorldName, Int64 a_Age)
 
 
 
-void cDeadlockDetect::DeadlockDetected(void)
+void cDeadlockDetect::DeadlockDetected(const AString & a_WorldName, Int64 a_WorldAge)
 {
+	LOGERROR("Deadlock detected: world %s has been stuck at age %lld. Aborting the server.",
+		a_WorldName.c_str(), static_cast<long long>(a_WorldAge)
+	);
+	ListTrackedCSs();
 	ASSERT(!"Deadlock detected");
 	abort();
+}
+
+
+
+
+
+void cDeadlockDetect::ListTrackedCSs(void)
+{
+	cCSLock lock(m_CS);
+	for (const auto & cs: m_TrackedCriticalSections)
+	{
+		LOG("CS at %p, %s: RecursionCount = %d, ThreadIDHash = %04llx",
+			static_cast<void *>(cs.first), cs.second.c_str(),
+			cs.first->m_RecursionCount, static_cast<UInt64>(std::hash<std::thread::id>()(cs.first->m_OwningThreadID))
+		);
+	}
 }
 
 

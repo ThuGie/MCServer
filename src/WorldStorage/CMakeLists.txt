@@ -1,13 +1,31 @@
 
-cmake_minimum_required (VERSION 2.6)
-project (MCServer)
-
-include_directories ("${PROJECT_SOURCE_DIR}/../")
-
-file(GLOB SOURCE
-    "*.cpp"
+SET (SRCS
+	EnchantmentSerializer.cpp
+	FastNBT.cpp
+	FireworksSerializer.cpp
+	MapSerializer.cpp
+	NBTChunkSerializer.cpp
+	SchematicFileSerializer.cpp
+	ScoreboardSerializer.cpp
+	StatSerializer.cpp
+	WSSAnvil.cpp
+	WorldStorage.cpp
 )
 
-add_library(WorldStorage ${SOURCE})
+SET (HDRS
+	EnchantmentSerializer.h
+	FastNBT.h
+	FireworksSerializer.h
+	MapSerializer.h
+	NBTChunkSerializer.h
+	SchematicFileSerializer.h
+	ScoreboardSerializer.h
+	StatSerializer.h
+	WSSAnvil.h
+	WorldStorage.h
+)
 
-target_link_libraries(WorldStorage OSSupport)
+if(NOT MSVC)
+	add_library(WorldStorage ${SRCS} ${HDRS})
+	target_link_libraries(WorldStorage fmt::fmt OSSupport)
+endif()

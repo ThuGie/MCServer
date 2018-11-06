@@ -1,21 +1,21 @@
 
 #pragma once
 
-#include "BlockHandler.h"
+#include "BlockPlant.h"
 
 
 
 
 
 class cBlockCactusHandler :
-	public cBlockHandler
+	public cBlockPlant
 {
+	typedef cBlockPlant Super;
 public:
 	cBlockCactusHandler(BLOCKTYPE a_BlockType)
-		: cBlockHandler(a_BlockType)
+		: Super(a_BlockType, false)
 	{
 	}
-
 
 	virtual void ConvertToPickups(cItems & a_Pickups, NIBBLETYPE a_BlockMeta) override
 	{
@@ -23,8 +23,7 @@ public:
 		a_Pickups.push_back(cItem(m_BlockType, 1, 0));
 	}
 
-
-	virtual bool CanBeAt(int a_RelX, int a_RelY, int a_RelZ, const cChunk & a_Chunk) override
+	virtual bool CanBeAt(cChunkInterface & a_ChunkInterface, int a_RelX, int a_RelY, int a_RelZ, const cChunk & a_Chunk) override
 	{
 		if (a_RelY <= 0)
 		{
@@ -37,7 +36,7 @@ public:
 			return false;
 		}
 
-		// Check surroundings. Cacti may ONLY be surrounded by air
+		// Check surroundings. Cacti may ONLY be surrounded by non-solid blocks
 		static const struct
 		{
 			int x, z;
@@ -54,7 +53,11 @@ public:
 			NIBBLETYPE BlockMeta;
 			if (
 				a_Chunk.UnboundedRelGetBlock(a_RelX + Coords[i].x, a_RelY, a_RelZ + Coords[i].z, BlockType, BlockMeta) &&
-				(g_BlockIsSolid[BlockType])
+				(
+					cBlockInfo::IsSolid(BlockType) ||
+					(BlockType == E_BLOCK_LAVA) ||
+					(BlockType == E_BLOCK_STATIONARY_LAVA)
+				)
 			)
 			{
 				return false;
@@ -63,17 +66,32 @@ public:
 
 		return true;
 	}
-	
 
-	void OnUpdate(cChunk & a_Chunk, int a_RelX, int a_RelY, int a_RelZ) override
+	virtual void OnUpdate(cChunkInterface & cChunkInterface, cWorldInterface & a_WorldInterface, cBlockPluginInterface & a_PluginInterface, cChunk & a_Chunk, int a_RelX, int a_RelY, int a_RelZ) override
 	{
-		a_Chunk.GetWorld()->GrowCactus(a_RelX + a_Chunk.GetPosX() * cChunkDef::Width, a_RelY, a_RelZ + a_Chunk.GetPosZ() * cChunkDef::Width, 1);
+		if (CanGrow(a_Chunk, a_RelX, a_RelY, a_RelZ) == paGrowth)
+		{
+			a_Chunk.GetWorld()->GrowCactus(a_RelX + a_Chunk.GetPosX() * cChunkDef::Width, a_RelY, a_RelZ + a_Chunk.GetPosZ() * cChunkDef::Width, 1);
+		}
 	}
 
-
-	virtual const char * GetStepSound(void) override
+	virtual ColourID GetMapBaseColourID(NIBBLETYPE a_Meta) override
 	{
-		return "step.cloth";
+		UNUSED(a_Meta);
+		return 7;
+	}
+
+protected:
+
+	virtual PlantAction CanGrow(cChunk & a_Chunk, int a_RelX, int a_RelY, int a_RelZ) override
+	{
+		auto Action = paStay;
+		if (((a_RelY + 1) < cChunkDef::Height) && (a_Chunk.GetBlock(a_RelX, a_RelY + 1, a_RelZ) == E_BLOCK_AIR))
+		{
+			Action = Super::CanGrow(a_Chunk, a_RelX, a_RelY, a_RelZ);
+		}
+
+		return Action;
 	}
 } ;
 

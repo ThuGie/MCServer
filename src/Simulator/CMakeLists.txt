@@ -1,11 +1,32 @@
 
-cmake_minimum_required (VERSION 2.6)
-project (MCServer)
-
-include_directories ("${PROJECT_SOURCE_DIR}/../")
-
-file(GLOB SOURCE
-    "*.cpp"
+SET (SRCS
+	DelayedFluidSimulator.cpp
+	FireSimulator.cpp
+	FloodyFluidSimulator.cpp
+	FluidSimulator.cpp
+	SandSimulator.cpp
+	Simulator.cpp
+	SimulatorManager.cpp
+	VanillaFluidSimulator.cpp
+	VaporizeFluidSimulator.cpp
 )
 
-add_library(Simulator ${SOURCE})
+SET (HDRS
+	DelayedFluidSimulator.h
+	FireSimulator.h
+	FloodyFluidSimulator.h
+	FluidSimulator.h
+	NoopFluidSimulator.h
+	NoopRedstoneSimulator.h
+	RedstoneSimulator.h
+	SandSimulator.h
+	Simulator.h
+	SimulatorManager.h
+	VanillaFluidSimulator.h
+	VaporizeFluidSimulator.h
+)
+
+if(NOT MSVC)
+	add_library(Simulator ${SRCS} ${HDRS})
+	target_link_libraries(Simulator fmt::fmt)
+endif()

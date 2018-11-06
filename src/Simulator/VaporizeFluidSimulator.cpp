@@ -5,7 +5,9 @@
 
 #include "Globals.h"
 #include "VaporizeFluidSimulator.h"
+#include "../OpaqueWorld.h"
 #include "../Chunk.h"
+#include "../Blocks/BroadcastInterface.h"
 
 
 
@@ -20,22 +22,27 @@ cVaporizeFluidSimulator::cVaporizeFluidSimulator(cWorld & a_World, BLOCKTYPE a_F
 
 
 
-void cVaporizeFluidSimulator::AddBlock(int a_BlockX, int a_BlockY, int a_BlockZ, cChunk * a_Chunk)
+void cVaporizeFluidSimulator::AddBlock(Vector3i a_Block, cChunk * a_Chunk)
 {
-	if (a_Chunk == NULL)
+	if (a_Chunk == nullptr)
 	{
 		return;
 	}
-	int RelX = a_BlockX - a_Chunk->GetPosX() * cChunkDef::Width;
-	int RelZ = a_BlockZ - a_Chunk->GetPosZ() * cChunkDef::Width;	
-	BLOCKTYPE BlockType = a_Chunk->GetBlock(RelX, a_BlockY, RelZ);
+	int RelX = a_Block.x - a_Chunk->GetPosX() * cChunkDef::Width;
+	int RelZ = a_Block.z - a_Chunk->GetPosZ() * cChunkDef::Width;
+	BLOCKTYPE BlockType = a_Chunk->GetBlock(RelX, a_Block.y, RelZ);
 	if (
 		(BlockType == m_FluidBlock) ||
 		(BlockType == m_StationaryFluidBlock)
 	)
 	{
-		a_Chunk->SetBlock(RelX, a_BlockY, RelZ, E_BLOCK_AIR, 0);
-		a_Chunk->BroadcastSoundEffect("random.fizz", a_BlockX * 8, a_BlockY * 8, a_BlockZ * 8, 1.0f, 0.6f);
+		a_Chunk->SetBlock(RelX, a_Block.y, RelZ, E_BLOCK_AIR, 0);
+		World::GetBroadcastInterface(m_World).BroadcastSoundEffect(
+			"block.fire.extinguish",
+			Vector3d(a_Block),
+			1.0f,
+			0.6f
+		);
 	}
 }
 

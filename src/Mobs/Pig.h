@@ -11,16 +11,23 @@ class cPig :
 	public cPassiveMonster
 {
 	typedef cPassiveMonster super;
-	
+
 public:
 	cPig(void);
 
-	CLASS_PROTODEF(cPig);
+	CLASS_PROTODEF(cPig)
 
-	virtual void GetDrops(cItems & a_Drops, cEntity * a_Killer = NULL) override;
+	// cEntity overrides
+	virtual bool DoTakeDamage(TakeDamageInfo & a_TDI) override;
+
+	virtual void GetDrops(cItems & a_Drops, cEntity * a_Killer = nullptr) override;
 	virtual void OnRightClicked(cPlayer & a_Player) override;
+	virtual void Tick(std::chrono::milliseconds a_Dt, cChunk & a_Chunk) override;
 
-	virtual const cItem GetFollowedItem(void) const override { return cItem(E_ITEM_CARROT); }
+	virtual void GetFollowedItems(cItems & a_Items) override
+	{
+		a_Items.Add(E_ITEM_CARROT);
+	}
 
 	bool IsSaddled(void) const { return m_bIsSaddled; }
 

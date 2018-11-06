@@ -15,13 +15,17 @@ public:
 		: cBlockHandler(a_BlockType)
 	{
 	}
-	
 
 	virtual void ConvertToPickups(cItems & a_Pickups, NIBBLETYPE a_BlockMeta) override
 	{
-		// Reset meta to 0
-		MTRand r1;
-		a_Pickups.push_back(cItem(E_ITEM_GLOWSTONE_DUST, (char)(2 + r1.randInt(2)), 0));
+		// Add more than one dust
+		a_Pickups.emplace_back(E_ITEM_GLOWSTONE_DUST, GetRandomProvider().RandInt<char>(2, 4), 0);
+	}
+
+	virtual ColourID GetMapBaseColourID(NIBBLETYPE a_Meta) override
+	{
+		UNUSED(a_Meta);
+		return 2;
 	}
 } ;
 

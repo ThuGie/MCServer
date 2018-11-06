@@ -7,7 +7,6 @@
 
 #include "Globals.h"
 #include "WorldStorage.h"
-#include "WSSCompact.h"
 #include "WSSAnvil.h"
 #include "../World.h"
 #include "../Generating/ChunkGenerator.h"
@@ -17,20 +16,13 @@
 
 
 
-/// If a chunk with this Y coord is de-queued, it is a signal to emit the saved-all message (cWorldStorage::QueueSavedMessage())
-#define CHUNK_Y_MESSAGE 2
-
-
-
-
-
-/// Example storage schema - forgets all chunks ;)
+/** Example storage schema - forgets all chunks */
 class cWSSForgetful :
 	public cWSSchema
 {
 public:
 	cWSSForgetful(cWorld * a_World) : cWSSchema(a_World) {}
-	
+
 protected:
 	// cWSSchema overrides:
 	virtual bool LoadChunk(const cChunkCoords & a_Chunk) override {return false; }
@@ -42,13 +34,13 @@ protected:
 
 
 
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 // cWorldStorage:
 
 cWorldStorage::cWorldStorage(void) :
 	super("cWorldStorage"),
-	m_World(NULL),
-	m_SaveSchema(NULL)
+	m_World(nullptr),
+	m_SaveSchema(nullptr)
 {
 }
 
@@ -68,13 +60,11 @@ cWorldStorage::~cWorldStorage()
 
 
 
-bool cWorldStorage::Start(cWorld * a_World, const AString & a_StorageSchemaName, int a_StorageCompressionFactor )
+void cWorldStorage::Initialize(cWorld & a_World, const AString & a_StorageSchemaName, int a_StorageCompressionFactor)
 {
-	m_World = a_World;
+	m_World = &a_World;
 	m_StorageSchemaName = a_StorageSchemaName;
 	InitSchemas(a_StorageCompressionFactor);
-	
-	return super::Start();
 }
 
 
@@ -92,20 +82,20 @@ void cWorldStorage::Stop(void)
 
 void cWorldStorage::WaitForFinish(void)
 {
-	LOG("Waiting for the world storage to finish saving");
-	
+	LOGD("Waiting for the world storage to finish saving");
+
 	{
 		m_LoadQueue.Clear();
 	}
-	
+
 	// Wait for the saving to finish:
 	WaitForSaveQueueEmpty();
-	
+
 	// Wait for the thread to finish:
 	m_ShouldTerminate = true;
-	m_Event.Set(); // Wake up the thread if waiting
-	super::Wait();
-	LOG("World storage thread finished");
+	m_Event.Set();  // Wake up the thread if waiting
+	super::Stop();
+	LOGD("World storage thread finished");
 }
 
 
@@ -148,9 +138,13 @@ size_t cWorldStorage::GetSaveQueueLength(void)
 
 
 
-void cWorldStorage::QueueLoadChunk(int a_ChunkX, int a_ChunkY, int a_ChunkZ, bool a_Generate)
+void cWorldStorage::QueueLoadChunk(int a_ChunkX, int a_ChunkZ, cChunkCoordCallback * a_Callback)
 {
-	m_LoadQueue.EnqueueItemIfNotPresent(sChunkLoad(a_ChunkX, a_ChunkY, a_ChunkZ, a_Generate));
+	ASSERT((a_ChunkX > -0x08000000) && (a_ChunkX < 0x08000000));
+	ASSERT((a_ChunkZ > -0x08000000) && (a_ChunkZ < 0x08000000));
+	ASSERT(m_World->IsChunkQueued(a_ChunkX, a_ChunkZ));
+
+	m_LoadQueue.EnqueueItem(cChunkCoordsWithCallback(a_ChunkX, a_ChunkZ, a_Callback));
 	m_Event.Set();
 }
 
@@ -158,39 +152,12 @@ void cWorldStorage::QueueLoadChunk(int a_ChunkX, int a_ChunkY, int a_ChunkZ, boo
 
 
 
-void cWorldStorage::QueueSaveChunk(int a_ChunkX, int a_ChunkY, int a_ChunkZ)
+void cWorldStorage::QueueSaveChunk(int a_ChunkX, int a_ChunkZ, cChunkCoordCallback * a_Callback)
 {
-	m_SaveQueue.EnqueueItemIfNotPresent(cChunkCoords(a_ChunkX, a_ChunkY, a_ChunkZ));
+	ASSERT(m_World->IsChunkValid(a_ChunkX, a_ChunkZ));
+
+	m_SaveQueue.EnqueueItem(cChunkCoordsWithCallback(a_ChunkX, a_ChunkZ, a_Callback));
 	m_Event.Set();
-}
-
-
-
-
-
-void cWorldStorage::QueueSavedMessage(void)
-{
-	// Pushes a special coord pair into the queue, signalizing a message instead
-	m_SaveQueue.EnqueueItem(cChunkCoords(0, CHUNK_Y_MESSAGE, 0));
-	m_Event.Set();
-}
-
-
-
-
-
-void cWorldStorage::UnqueueLoad(int a_ChunkX, int a_ChunkY, int a_ChunkZ)
-{
-	m_LoadQueue.Remove(sChunkLoad(a_ChunkX, a_ChunkY, a_ChunkZ,true));
-}
-
-
-
-
-
-void cWorldStorage::UnqueueSave(const cChunkCoords & a_Chunk)
-{
-	m_SaveQueue.Remove(a_Chunk);
 }
 
 
@@ -200,11 +167,10 @@ void cWorldStorage::UnqueueSave(const cChunkCoords & a_Chunk)
 void cWorldStorage::InitSchemas(int a_StorageCompressionFactor)
 {
 	// The first schema added is considered the default
-	m_Schemas.push_back(new cWSSAnvil    (m_World,a_StorageCompressionFactor));
-	m_Schemas.push_back(new cWSSCompact  (m_World,a_StorageCompressionFactor));
+	m_Schemas.push_back(new cWSSAnvil    (m_World, a_StorageCompressionFactor));
 	m_Schemas.push_back(new cWSSForgetful(m_World));
 	// Add new schemas here
-	
+
 	if (NoCaseCompare(m_StorageSchemaName, "default") == 0)
 	{
 		m_SaveSchema = m_Schemas.front();
@@ -218,9 +184,9 @@ void cWorldStorage::InitSchemas(int a_StorageCompressionFactor)
 			return;
 		}
 	}  // for itr - m_Schemas[]
-	
+
 	// Unknown schema selected, let the admin know:
-	LOGWARNING("Unknown storage schema name \"%s\". Using default (\"%s\"). Available schemas:", 
+	LOGWARNING("Unknown storage schema name \"%s\". Using default (\"%s\"). Available schemas:",
 		m_StorageSchemaName.c_str(), m_SaveSchema->GetName().c_str()
 	);
 	for (cWSSchemaList::iterator itr = m_Schemas.begin(); itr != m_Schemas.end(); ++itr)
@@ -243,12 +209,11 @@ void cWorldStorage::Execute(void)
 		bool Success;
 		do
 		{
-			Success = false;
 			if (m_ShouldTerminate)
 			{
 				return;
 			}
-			
+
 			Success = LoadOneChunk();
 			Success |= SaveOneChunk();
 		} while (Success);
@@ -261,22 +226,23 @@ void cWorldStorage::Execute(void)
 
 bool cWorldStorage::LoadOneChunk(void)
 {
-	sChunkLoad ToLoad(0, 0, 0, false);
+	// Dequeue an item, bail out if there's none left:
+	cChunkCoordsWithCallback ToLoad(0, 0, nullptr);
 	bool ShouldLoad = m_LoadQueue.TryDequeueItem(ToLoad);
-	if (ShouldLoad && !LoadChunk(ToLoad.m_ChunkX, ToLoad.m_ChunkY, ToLoad.m_ChunkZ))
+	if (!ShouldLoad)
 	{
-		if (ToLoad.m_Generate)
-		{
-			// The chunk couldn't be loaded, generate it:
-			m_World->GetGenerator().QueueGenerateChunk(ToLoad.m_ChunkX, ToLoad.m_ChunkY, ToLoad.m_ChunkZ);
-		}
-		else
-		{
-			// TODO: Notify the world that the load has failed:
-			// m_World->ChunkLoadFailed(ToLoad.m_ChunkX, ToLoad.m_ChunkY, ToLoad.m_ChunkZ);
-		}
+		return false;
 	}
-	return ShouldLoad;
+
+	// Load the chunk:
+	bool res = LoadChunk(ToLoad.m_ChunkX, ToLoad.m_ChunkZ);
+
+	// Call the callback, if specified:
+	if (ToLoad.m_Callback != nullptr)
+	{
+		ToLoad.m_Callback->Call(ToLoad.m_ChunkX, ToLoad.m_ChunkZ, res);
+	}
+	return res;
 }
 
 
@@ -285,46 +251,50 @@ bool cWorldStorage::LoadOneChunk(void)
 
 bool cWorldStorage::SaveOneChunk(void)
 {
-	cChunkCoords ToSave(0, 0, 0);
+	// Dequeue one chunk to save:
+	cChunkCoordsWithCallback ToSave(0, 0, nullptr);
 	bool ShouldSave = m_SaveQueue.TryDequeueItem(ToSave);
-	if(ShouldSave) {
-		if (ToSave.m_ChunkY == CHUNK_Y_MESSAGE)
+	if (!ShouldSave)
+	{
+		return false;
+	}
+
+	// Save the chunk, if it's valid:
+	bool Status = false;
+	if (m_World->IsChunkValid(ToSave.m_ChunkX, ToSave.m_ChunkZ))
+	{
+		m_World->MarkChunkSaving(ToSave.m_ChunkX, ToSave.m_ChunkZ);
+		if (m_SaveSchema->SaveChunk(cChunkCoords(ToSave.m_ChunkX, ToSave.m_ChunkZ)))
 		{
-			LOGINFO("Saved all chunks in world %s", m_World->GetName().c_str());
-			return ShouldSave;
-		}
-		if (ShouldSave && m_World->IsChunkValid(ToSave.m_ChunkX, ToSave.m_ChunkZ))
-		{
-			m_World->MarkChunkSaving(ToSave.m_ChunkX, ToSave.m_ChunkZ);
-			if (m_SaveSchema->SaveChunk(ToSave))
-			{
-				m_World->MarkChunkSaved(ToSave.m_ChunkX, ToSave.m_ChunkZ);
-			}
+			m_World->MarkChunkSaved(ToSave.m_ChunkX, ToSave.m_ChunkZ);
+			Status = true;
 		}
 	}
-	return ShouldSave;
+
+	// Call the callback, if specified:
+	if (ToSave.m_Callback != nullptr)
+	{
+		ToSave.m_Callback->Call(ToSave.m_ChunkX, ToSave.m_ChunkZ, Status);
+	}
+	return true;
 }
 
 
 
 
 
-bool cWorldStorage::LoadChunk(int a_ChunkX, int a_ChunkY, int a_ChunkZ)
+bool cWorldStorage::LoadChunk(int a_ChunkX, int a_ChunkZ)
 {
-	if (m_World->IsChunkValid(a_ChunkX, a_ChunkZ))
-	{
-		// Already loaded (can happen, since the queue is async)
-		return true;
-	}
-	
-	cChunkCoords Coords(a_ChunkX, a_ChunkY, a_ChunkZ);
+	ASSERT(m_World->IsChunkQueued(a_ChunkX, a_ChunkZ));
+
+	cChunkCoords Coords(a_ChunkX, a_ChunkZ);
 
 	// First try the schema that is used for saving
 	if (m_SaveSchema->LoadChunk(Coords))
 	{
 		return true;
 	}
-	
+
 	// If it didn't have the chunk, try all the other schemas:
 	for (cWSSchemaList::iterator itr = m_Schemas.begin(); itr != m_Schemas.end(); ++itr)
 	{
@@ -333,10 +303,10 @@ bool cWorldStorage::LoadChunk(int a_ChunkX, int a_ChunkY, int a_ChunkZ)
 			return true;
 		}
 	}
-	
+
 	// Notify the chunk owner that the chunk failed to load (sets cChunk::m_HasLoadFailed to true):
-	m_World->ChunkLoadFailed(a_ChunkX, a_ChunkY, a_ChunkZ);
-	
+	m_World->ChunkLoadFailed(a_ChunkX, a_ChunkZ);
+
 	return false;
 }
 

@@ -2,34 +2,35 @@
 #include "Globals.h"
 
 #include "ChunkGenerator.h"
-#include "inifile/iniFile.h"
 #include "ChunkDesc.h"
 #include "ComposableGenerator.h"
 #include "Noise3DGenerator.h"
-#include "../MersenneTwister.h"
+#include "../IniFile.h"
+#include "../FastRandom.h"
 
 
 
 
 
-/// If the generation queue size exceeds this number, a warning will be output
+/** If the generation queue size exceeds this number, a warning will be output */
 const unsigned int QUEUE_WARNING_LIMIT = 1000;
 
-/// If the generation queue size exceeds this number, chunks with no clients will be skipped
+/** If the generation queue size exceeds this number, chunks with no clients will be skipped */
 const unsigned int QUEUE_SKIP_LIMIT = 500;
 
 
 
 
 
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 // cChunkGenerator:
 
 cChunkGenerator::cChunkGenerator(void) :
 	super("cChunkGenerator"),
-	m_Generator(NULL),
-	m_PluginInterface(NULL),
-	m_ChunkSink(NULL)
+	m_Seed(0),  // Will be overwritten by the actual generator
+	m_Generator(nullptr),
+	m_PluginInterface(nullptr),
+	m_ChunkSink(nullptr)
 {
 }
 
@@ -46,15 +47,25 @@ cChunkGenerator::~cChunkGenerator()
 
 
 
-bool cChunkGenerator::Start(cPluginInterface & a_PluginInterface, cChunkSink & a_ChunkSink, cIniFile & a_IniFile)
+bool cChunkGenerator::Initialize(cPluginInterface & a_PluginInterface, cChunkSink & a_ChunkSink, cIniFile & a_IniFile)
 {
 	m_PluginInterface = &a_PluginInterface;
 	m_ChunkSink = &a_ChunkSink;
 
-	MTRand rnd;
-	m_Seed = a_IniFile.GetValueSetI("Seed", "Seed", rnd.randInt());
-	AString GeneratorName = a_IniFile.GetValueSet("Generator", "Generator", "Composable");
+	// Get the seed; create a new one and log it if not found in the INI file:
+	if (a_IniFile.HasValue("Seed", "Seed"))
+	{
+		m_Seed = a_IniFile.GetValueI("Seed", "Seed");
+	}
+	else
+	{
+		m_Seed = GetRandomProvider().RandInt();
+		LOGINFO("Chosen a new random seed for world: %d", m_Seed);
+		a_IniFile.SetValueI("Seed", "Seed", m_Seed);
+	}
 
+	// Get the generator engine based on the INI file settings:
+	AString GeneratorName = a_IniFile.GetValueSet("Generator", "Generator", "Composable");
 	if (NoCaseCompare(GeneratorName, "Noise3D") == 0)
 	{
 		m_Generator = new cNoise3DGenerator(*this);
@@ -68,15 +79,14 @@ bool cChunkGenerator::Start(cPluginInterface & a_PluginInterface, cChunkSink & a
 		m_Generator = new cComposableGenerator(*this);
 	}
 
-	if (m_Generator == NULL)
+	if (m_Generator == nullptr)
 	{
 		LOGERROR("Generator could not start, aborting the server");
 		return false;
 	}
 
 	m_Generator->Initialize(a_IniFile);
-
-	return super::Start();
+	return true;
 }
 
 
@@ -88,37 +98,29 @@ void cChunkGenerator::Stop(void)
 	m_ShouldTerminate = true;
 	m_Event.Set();
 	m_evtRemoved.Set();  // Wake up anybody waiting for empty queue
-	Wait();
+	super::Stop();
 
 	delete m_Generator;
-	m_Generator = NULL;
+	m_Generator = nullptr;
 }
 
 
 
 
 
-void cChunkGenerator::QueueGenerateChunk(int a_ChunkX, int a_ChunkY, int a_ChunkZ)
+void cChunkGenerator::QueueGenerateChunk(int a_ChunkX, int a_ChunkZ, bool a_ForceGenerate, cChunkCoordCallback * a_Callback)
 {
+	ASSERT(m_ChunkSink->IsChunkQueued(a_ChunkX, a_ChunkZ));
+
 	{
 		cCSLock Lock(m_CS);
-
-		// Check if it is already in the queue:
-		for (cChunkCoordsList::iterator itr = m_Queue.begin(); itr != m_Queue.end(); ++itr)
-		{
-			if ((itr->m_ChunkX == a_ChunkX) && (itr->m_ChunkY == a_ChunkY) && (itr->m_ChunkZ == a_ChunkZ))
-			{
-				// Already in the queue, bail out
-				return;
-			}
-		}  // for itr - m_Queue[]
 
 		// Add to queue, issue a warning if too many:
 		if (m_Queue.size() >= QUEUE_WARNING_LIMIT)
 		{
-			LOGWARN("WARNING: Adding chunk [%i, %i] to generation queue; Queue is too big! (%i)", a_ChunkX, a_ChunkZ, m_Queue.size());
+			LOGWARN("WARNING: Adding chunk [%i, %i] to generation queue; Queue is too big! (%zu)", a_ChunkX, a_ChunkZ, m_Queue.size());
 		}
-		m_Queue.push_back(cChunkCoords(a_ChunkX, a_ChunkY, a_ChunkZ));
+		m_Queue.push_back(cQueueItem{a_ChunkX, a_ChunkZ, a_ForceGenerate, a_Callback});
 	}
 
 	m_Event.Set();
@@ -130,7 +132,7 @@ void cChunkGenerator::QueueGenerateChunk(int a_ChunkX, int a_ChunkY, int a_Chunk
 
 void cChunkGenerator::GenerateBiomes(int a_ChunkX, int a_ChunkZ, cChunkDef::BiomeMap & a_BiomeMap)
 {
-	if (m_Generator != NULL)
+	if (m_Generator != nullptr)
 	{
 		m_Generator->GenerateBiomes(a_ChunkX, a_ChunkZ, a_BiomeMap);
 	}
@@ -157,7 +159,7 @@ void cChunkGenerator::WaitForQueueEmpty(void)
 int cChunkGenerator::GetQueueLength(void)
 {
 	cCSLock Lock(m_CS);
-	return (int)m_Queue.size();
+	return static_cast<int>(m_Queue.size());
 }
 
 
@@ -166,7 +168,7 @@ int cChunkGenerator::GetQueueLength(void)
 
 EMCSBiome cChunkGenerator::GetBiomeAt(int a_BlockX, int a_BlockZ)
 {
-	ASSERT(m_Generator != NULL);
+	ASSERT(m_Generator != nullptr);
 	return m_Generator->GetBiomeAt(a_BlockX, a_BlockZ);
 }
 
@@ -177,13 +179,13 @@ EMCSBiome cChunkGenerator::GetBiomeAt(int a_BlockX, int a_BlockZ)
 BLOCKTYPE cChunkGenerator::GetIniBlock(cIniFile & a_IniFile, const AString & a_SectionName, const AString & a_ValueName, const AString & a_Default)
 {
 	AString BlockType = a_IniFile.GetValueSet(a_SectionName, a_ValueName, a_Default);
-	BLOCKTYPE Block = BlockStringToType(BlockType);
+	int Block = BlockStringToType(BlockType);
 	if (Block < 0)
 	{
-		LOGWARN("[&s].%s Could not parse block value \"%s\". Using default: \"%s\".", a_SectionName.c_str(), a_ValueName.c_str(), BlockType.c_str(),a_Default.c_str());
-		return BlockStringToType(a_Default);
+		LOGWARN("[%s].%s Could not parse block value \"%s\". Using default: \"%s\".", a_SectionName.c_str(), a_ValueName.c_str(), BlockType.c_str(), a_Default.c_str());
+		return static_cast<BLOCKTYPE>(BlockStringToType(a_Default));
 	}
-	return Block;
+	return static_cast<BLOCKTYPE>(Block);
 }
 
 
@@ -205,10 +207,10 @@ void cChunkGenerator::Execute(void)
 		{
 			if ((NumChunksGenerated > 16) && (clock() - LastReportTick > CLOCKS_PER_SEC))
 			{
-				LOG("Chunk generator performance: %.2f ch/s (%d ch total)",
-					(double)NumChunksGenerated * CLOCKS_PER_SEC/ (clock() - GenerationStart),
+				/* LOG("Chunk generator performance: %.2f ch / sec (%d ch total)",
+					static_cast<double>(NumChunksGenerated) * CLOCKS_PER_SEC/ (clock() - GenerationStart),
 					NumChunksGenerated
-				);
+				); */
 			}
 			cCSUnlock Unlock(Lock);
 			m_Event.Wait();
@@ -228,39 +230,51 @@ void cChunkGenerator::Execute(void)
 			continue;
 		}
 
-		cChunkCoords coords = m_Queue.front();		// Get next coord from queue
-		m_Queue.erase( m_Queue.begin() );	// Remove coordinate from queue
+		cQueueItem item = m_Queue.front();  // Get next chunk from the queue
 		bool SkipEnabled = (m_Queue.size() > QUEUE_SKIP_LIMIT);
-		Lock.Unlock();			// Unlock ASAP
+		m_Queue.erase(m_Queue.begin());  // Remove the item from the queue
+		Lock.Unlock();  // Unlock ASAP
 		m_evtRemoved.Set();
 
 		// Display perf info once in a while:
-		if ((NumChunksGenerated > 16) && (clock() - LastReportTick > 2 * CLOCKS_PER_SEC))
+		if ((NumChunksGenerated > 512) && (clock() - LastReportTick > 2 * CLOCKS_PER_SEC))
 		{
-			LOG("Chunk generator performance: %.2f ch/s (%d ch total)",
-				(double)NumChunksGenerated * CLOCKS_PER_SEC / (clock() - GenerationStart),
+			LOG("Chunk generator performance: %.2f ch / sec (%d ch total)",
+				static_cast<double>(NumChunksGenerated) * CLOCKS_PER_SEC / (clock() - GenerationStart),
 				NumChunksGenerated
 			);
 			LastReportTick = clock();
 		}
 
-		// Hack for regenerating chunks: if Y != 0, the chunk is considered invalid, even if it has its data set
-		if ((coords.m_ChunkY == 0) && m_ChunkSink->IsChunkValid(coords.m_ChunkX, coords.m_ChunkZ))
+		// Skip the chunk if it's already generated and regeneration is not forced. Report as success:
+		if (!item.m_ForceGenerate && m_ChunkSink->IsChunkValid(item.m_ChunkX, item.m_ChunkZ))
 		{
-			LOGD("Chunk [%d, %d] already generated, skipping generation", coords.m_ChunkX, coords.m_ChunkZ);
-			// Already generated, ignore request
+			LOGD("Chunk [%d, %d] already generated, skipping generation", item.m_ChunkX, item.m_ChunkZ);
+			if (item.m_Callback != nullptr)
+			{
+				item.m_Callback->Call(item.m_ChunkX, item.m_ChunkZ, true);
+			}
 			continue;
 		}
 
-		if (SkipEnabled && !m_ChunkSink->HasChunkAnyClients(coords.m_ChunkX, coords.m_ChunkZ))
+		// Skip the chunk if the generator is overloaded:
+		if (SkipEnabled && !m_ChunkSink->HasChunkAnyClients(item.m_ChunkX, item.m_ChunkZ))
 		{
-			LOGWARNING("Chunk generator overloaded, skipping chunk [%d, %d]", coords.m_ChunkX, coords.m_ChunkZ);
+			LOGWARNING("Chunk generator overloaded, skipping chunk [%d, %d]", item.m_ChunkX, item.m_ChunkZ);
+			if (item.m_Callback != nullptr)
+			{
+				item.m_Callback->Call(item.m_ChunkX, item.m_ChunkZ, false);
+			}
 			continue;
 		}
 
-		LOGD("Generating chunk [%d, %d, %d]", coords.m_ChunkX, coords.m_ChunkY, coords.m_ChunkZ);
-		DoGenerate(coords.m_ChunkX, coords.m_ChunkY, coords.m_ChunkZ);
-
+		// Generate the chunk:
+		// LOGD("Generating chunk [%d, %d]", item.m_ChunkX, item.m_ChunkZ);
+		DoGenerate(item.m_ChunkX, item.m_ChunkZ);
+		if (item.m_Callback != nullptr)
+		{
+			item.m_Callback->Call(item.m_ChunkX, item.m_ChunkZ, true);
+		}
 		NumChunksGenerated++;
 	}  // while (!bStop)
 }
@@ -268,19 +282,20 @@ void cChunkGenerator::Execute(void)
 
 
 
-void cChunkGenerator::DoGenerate(int a_ChunkX, int a_ChunkY, int a_ChunkZ)
+
+void cChunkGenerator::DoGenerate(int a_ChunkX, int a_ChunkZ)
 {
-	ASSERT(m_PluginInterface != NULL);
-	ASSERT(m_ChunkSink != NULL);
-	
+	ASSERT(m_PluginInterface != nullptr);
+	ASSERT(m_ChunkSink != nullptr);
+
 	cChunkDesc ChunkDesc(a_ChunkX, a_ChunkZ);
 	m_PluginInterface->CallHookChunkGenerating(ChunkDesc);
 	m_Generator->DoGenerate(a_ChunkX, a_ChunkZ, ChunkDesc);
 	m_PluginInterface->CallHookChunkGenerated(ChunkDesc);
 
 	#ifdef _DEBUG
-	// Verify that the generator has produced valid data:
-	ChunkDesc.VerifyHeightmap();
+		// Verify that the generator has produced valid data:
+		ChunkDesc.VerifyHeightmap();
 	#endif
 
 	m_ChunkSink->OnChunkGenerated(ChunkDesc);
@@ -290,7 +305,7 @@ void cChunkGenerator::DoGenerate(int a_ChunkX, int a_ChunkY, int a_ChunkZ)
 
 
 
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////////////////////
 // cChunkGenerator::cGenerator:
 
 cChunkGenerator::cGenerator::cGenerator(cChunkGenerator & a_ChunkGenerator) :

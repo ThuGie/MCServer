@@ -16,8 +16,6 @@ In the descending class' constructor call the Start() method to start the thread
 
 
 #pragma once
-#ifndef CISTHREAD_H_INCLUDED
-#define CISTHREAD_H_INCLUDED
 
 
 
@@ -26,74 +24,44 @@ In the descending class' constructor call the Start() method to start the thread
 class cIsThread
 {
 protected:
-	/// This is the main thread entrypoint
+	/** This is the main thread entrypoint.
+	This function, overloaded by the descendants, is called in the new thread. */
 	virtual void Execute(void) = 0;
 
-	/// The overriden Execute() method should check this value periodically and terminate if this is true
-	volatile bool m_ShouldTerminate;
-	
+	/** The overriden Execute() method should check this value periodically and terminate if this is true. */
+	std::atomic<bool> m_ShouldTerminate;
+
 public:
-	cIsThread(const AString & iThreadName);
-	~cIsThread();
-	
-	/// Starts the thread; returns without waiting for the actual start
+	cIsThread(const AString & a_ThreadName);
+	virtual ~cIsThread();
+
+	/** Starts the thread; returns without waiting for the actual start. */
 	bool Start(void);
-	
-	/// Signals the thread to terminate and waits until it's finished
+
+	/** Signals the thread to terminate and waits until it's finished. */
 	void Stop(void);
-	
-	/// Waits for the thread to finish. Doesn't signalize the ShouldTerminate flag
+
+	/** Waits for the thread to finish. Doesn't signalize the ShouldTerminate flag. */
 	bool Wait(void);
-	
-	/// Returns the OS-dependent thread ID for the caller's thread
-	static unsigned long GetCurrentID(void);
 
-protected:
+	/** Returns true if the thread calling this function is the thread contained within this object. */
+	bool IsCurrentThread(void) const { return std::this_thread::get_id() == m_Thread.get_id(); }
+
+private:
+
+	/** The name of the thread, used to aid debugging in IDEs which support named threads */
 	AString m_ThreadName;
-	
-	// Value used for "no handle":
-	#ifdef _WIN32
-		#define NULL_HANDLE NULL
-	#else
-		#define NULL_HANDLE 0
-	#endif
 
-	#ifdef _WIN32
-	
-		HANDLE m_Handle;
-		
-		static DWORD_PTR __stdcall thrExecute(LPVOID a_Param)
-		{
-			// Create a window so that the thread can be identified by 3rd party tools:
-			HWND IdentificationWnd = CreateWindow("STATIC", ((cIsThread *)a_Param)->m_ThreadName.c_str(), 0, 0, 0, 0, WS_OVERLAPPED, NULL, NULL, NULL, NULL);
-			
-			// Run the thread:
-			((cIsThread *)a_Param)->Execute();
-			
-			// Destroy the identification window:
-			DestroyWindow(IdentificationWnd);
-			
-			return 0;
-		}
-		
-	#else  // _WIN32
-	
-		pthread_t m_Handle;
-		
-		static void * thrExecute(void * a_Param)
-		{
-			((cIsThread *)a_Param)->Execute();
-			return NULL;
-		}
-		
-	#endif  // else _WIN32
+	/** The thread object which holds the created thread for later manipulation */
+	std::thread m_Thread;
+
+	/** The event that is used to wait with the thread's execution until the thread object is fully initialized.
+	This prevents the IsCurrentThread() call to fail because of a race-condition where the thread starts before m_Thread has been fully assigned. */
+	cEvent m_evtStart;
+
+	/** Wrapper for Execute() that waits for the initialization event, to prevent race conditions in thread initialization. */
+	void DoExecute(void);
 } ;
-
-
-
-
-
-#endif  // CISTHREAD_H_INCLUDED
 
 
 
